@@ -218,3 +218,21 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform.lock.hcl.bak
+crash.log
+
+# Secrets — NEVER commit these
+.env
+*-key.json
+*credentials*.json
+service-account*.json
+
+# OS / editor
+.DS_Store
+.vscode/settings.json
