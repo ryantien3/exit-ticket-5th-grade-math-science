@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+# Lets tests "import app" when pytest is run from app/api.
+pythonpath = ["."]
+testpaths = ["tests"]
