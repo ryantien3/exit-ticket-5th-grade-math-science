@@ -129,11 +129,34 @@ class Classroom(Base):
 
 class Student(Base):
     __tablename__ = "students"
-    __table_args__ = (UniqueConstraint("classroom_id", "display_name"),)
+    __table_args__ = (
+        UniqueConstraint("classroom_id", "display_name"),
+        UniqueConstraint("login_code"),
+        # Must match LOGIN_CODE_ALPHABET in app/auth.py: 6 of A-Z and 2-9, minus I, L and O.
+        CheckConstraint("login_code ~ '^[A-HJKMNP-Z2-9]{6}$'", name="login_code_format"),
+    )
 
     id: Mapped[uuid.UUID] = uuid_pk()
     classroom_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("classrooms.id"))
     display_name: Mapped[str] = mapped_column(Text)  # synthetic only, e.g. "Avery B."
+    # The student's secret sign-in code. Stored as plain text on purpose: teachers need to
+    # read it to hand it out. Only teacher endpoints ever return it.
+    login_code: Mapped[str] = mapped_column(Text)
+
+
+class ClassroomExitTicket(Base):
+    """A release: students in this classroom can see and submit this exit ticket.
+    No row means the ticket is hidden from that class."""
+
+    __tablename__ = "classroom_exit_tickets"
+
+    classroom_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("classrooms.id", ondelete="CASCADE"), primary_key=True
+    )
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("exit_tickets.id", ondelete="CASCADE"), primary_key=True
+    )
+    released_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Answer(Base):

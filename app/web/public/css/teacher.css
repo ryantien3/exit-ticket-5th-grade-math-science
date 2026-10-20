@@ -1,0 +1,454 @@
+/* Teacher dashboard: builds on styles.css (same colors, buttons and focus ring),
+   with denser layouts for tables on a laptop or iPad. */
+
+html:has(body.teacher) {
+  font-size: 112.5%; /* 18px base: adults reading dense data, still comfortably large */
+}
+
+:root {
+  /* Mastery levels, from the dataviz skill's status palette (good / warning / critical).
+     These mark a cell's left bar and a badge's border; text always stays in --text.
+     Tints get darker as the level gets worse, so "needs support" stands out most. */
+  --level-mastered: #0ca30c;
+  --level-mastered-tint: #e6f5e6;
+  --level-approaching: #fab219;
+  --level-approaching-tint: #fdedc8;
+  --level-needs-support: #d03b3b;
+  --level-needs-support-tint: #f6c9c9;
+  --rule: #d9d9e3; /* table lines: decoration only */
+  --panel-border: #c9c9d6;
+  --stripe: #f1f1f6;
+}
+
+body.teacher .page {
+  max-width: 80rem;
+}
+
+.screen.narrow {
+  max-width: 30rem;
+}
+
+h2 {
+  font-size: 1.3rem;
+  margin: 0 0 0.75rem;
+}
+
+.panel {
+  background: var(--surface);
+  border: 2px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+  min-width: 0; /* lets wide tables scroll inside the panel instead of stretching the page */
+}
+
+.panel-intro {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+/* --- Top bar: title, classroom, refresh controls --- */
+
+.dashboard-top {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 0.5rem 1.5rem;
+}
+
+.classroom-picker .text-input {
+  width: auto;
+  min-width: 14rem;
+}
+
+.refresh-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin: 1rem 0;
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius);
+  background: var(--stripe);
+}
+
+.refresh-status {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.refresh-alert {
+  flex-basis: 100%;
+  order: 3;
+  margin: 0;
+  color: var(--incorrect);
+  font-weight: 700;
+}
+
+.refresh-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* Two columns on a laptop or a landscape iPad; one column below that. */
+.dashboard-grid {
+  display: grid;
+  gap: 0 1rem;
+}
+
+@media (min-width: 64rem) {
+  .dashboard-grid {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    align-items: start;
+  }
+}
+
+/* --- Tables --- */
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  margin-bottom: 1rem;
+}
+
+.data-table caption {
+  text-align: left;
+  font-weight: 800;
+  font-size: 1.1rem;
+  padding: 0.25rem 0 0.5rem;
+}
+
+.data-table th,
+.data-table td {
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--rule);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.data-table tbody th {
+  font-weight: 400;
+}
+
+.num {
+  text-align: right !important;
+  font-variant-numeric: tabular-nums; /* digits line up in columns */
+}
+
+.domain-row th {
+  background: var(--stripe);
+  color: var(--muted);
+  font-weight: 700 !important;
+  font-size: 0.85rem;
+}
+
+.standard-code {
+  display: block;
+  font-weight: 700;
+}
+
+.standard-description {
+  display: block;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* --- Level badges (symbol + word + color: never color alone) --- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0.6rem;
+  border: 2px solid;
+  border-radius: 999px;
+  color: var(--text);
+  font-weight: 700;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.badge.level-mastered {
+  background: var(--level-mastered-tint);
+  border-color: var(--level-mastered);
+}
+
+.badge.level-approaching {
+  background: var(--level-approaching-tint);
+  border-color: var(--level-approaching);
+}
+
+.badge.level-needs-support {
+  background: var(--level-needs-support-tint);
+  border-color: var(--level-needs-support);
+}
+
+.badge.level-none {
+  background: var(--surface);
+  border-color: var(--border);
+  border-style: dashed;
+  color: var(--muted);
+}
+
+.legend {
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.check-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.5rem 0 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.check-label input {
+  width: 1.25rem;
+  height: 1.25rem;
+  accent-color: var(--primary);
+}
+
+/* --- Heatmap --- */
+
+/* Scrolls inside its own box (both ways), so the page itself never scrolls sideways. */
+.table-scroll {
+  overflow: auto;
+  max-height: 70vh;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+}
+
+.heatmap {
+  border-collapse: separate;
+  border-spacing: 2px; /* a thin white gap between colored cells */
+  font-size: 0.85rem;
+  min-width: 100%;
+}
+
+.heatmap th,
+.heatmap td {
+  padding: 0.35rem 0.5rem;
+  white-space: nowrap;
+  text-align: center;
+}
+
+/* Header rows and the names column stay put while the table scrolls. */
+.heatmap thead th {
+  position: sticky;
+  background: var(--surface);
+  z-index: 2;
+}
+
+.heatmap thead tr:first-child th {
+  top: 0;
+  height: 2rem;
+}
+
+.heatmap thead tr:nth-child(2) th {
+  top: calc(2rem + 2px);
+  border-bottom: 2px solid var(--border);
+}
+
+.heatmap .sticky-col {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+  text-align: left;
+  font-weight: 600;
+}
+
+.heatmap thead .sticky-col {
+  z-index: 3; /* the corner cell sits above both sticky directions */
+}
+
+.heatmap .group-header {
+  border-bottom: 2px solid var(--rule);
+}
+
+.heatmap .code-header {
+  cursor: help;
+}
+
+.heatmap .cell {
+  min-width: 4.25rem;
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.heatmap .cell.level-mastered {
+  background: var(--level-mastered-tint);
+  box-shadow: inset 4px 0 0 var(--level-mastered);
+}
+
+.heatmap .cell.level-approaching {
+  background: var(--level-approaching-tint);
+  box-shadow: inset 4px 0 0 var(--level-approaching);
+}
+
+.heatmap .cell.level-needs-support {
+  background: var(--level-needs-support-tint);
+  box-shadow: inset 4px 0 0 var(--level-needs-support);
+  font-weight: 700;
+}
+
+.heatmap .cell.empty {
+  background: var(--surface);
+}
+
+.cell-symbol {
+  font-weight: 800;
+  margin-right: 0.25rem;
+}
+
+.needs-count {
+  color: var(--incorrect);
+  font-weight: 800;
+}
+
+.heatmap tfoot th,
+.heatmap tfoot td {
+  border-top: 2px solid var(--border);
+  font-weight: 700;
+}
+
+/* --- Recent activity --- */
+
+.activity-feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.activity-item {
+  padding: 0.6rem 0.5rem;
+  border-bottom: 1px solid var(--rule);
+  border-radius: 6px;
+}
+
+.activity-line,
+.activity-meta {
+  margin: 0;
+}
+
+.activity-meta {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* A just-arrived submission glows briefly, then fades back. */
+.activity-item.is-new {
+  animation: arrive 4s ease-out;
+}
+
+@keyframes arrive {
+  from {
+    background: var(--selected-bg);
+  }
+  to {
+    background: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-item.is-new {
+    animation: none;
+    background: var(--selected-bg);
+  }
+}
+
+/* --- Exit ticket releases --- */
+
+.release-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.release-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.release-info {
+  flex: 1 1 12rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.release-title {
+  font-weight: 700;
+}
+
+.release-meta {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.pill {
+  padding: 0.1rem 0.6rem;
+  border: 2px solid;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.pill.released {
+  background: var(--correct-bg);
+  border-color: var(--correct);
+  color: var(--correct);
+}
+
+.pill.hidden-pill {
+  background: var(--stripe);
+  border-color: var(--border);
+  border-style: dashed;
+  color: var(--muted);
+}
+
+/* --- Student codes --- */
+
+details summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--primary);
+  padding: 0.25rem 0;
+}
+
+.login-code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+}
+
+.codes-table {
+  max-width: 28rem;
+}
+
+/* Same focus ring as everything else in styles.css. */
+.check-label input:focus-visible,
+.table-scroll:focus-visible,
+details summary:focus-visible {
+  outline: 4px solid var(--focus);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 9px var(--focus-halo);
+}

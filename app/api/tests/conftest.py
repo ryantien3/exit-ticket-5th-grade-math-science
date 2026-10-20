@@ -18,6 +18,9 @@ TEST_DATABASE_URL = os.environ.get(
 # Forced (not setdefault), before the app is imported, so a DATABASE_URL in your
 # shell or .env can never point the tests at your dev database.
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+# Test-only values, so tests never depend on (or reveal) the secrets in your .env.
+os.environ["SESSION_SECRET"] = "test-only-session-secret-not-used-anywhere-else"
+os.environ["TEACHER_PASSCODE"] = "test-teacher-passcode"
 
 # Make scripts/seed.py importable, so tests load exactly the same seed data.
 sys.path.insert(0, str(API_DIR.parent.parent / "scripts"))
@@ -34,6 +37,7 @@ from app import events  # noqa: E402
 from app.db import get_engine, get_session  # noqa: E402
 from app.main import app  # noqa: E402
 from seed import seed  # noqa: E402
+from seed_helpers import CLASSROOM_ID, teacher_headers, ticket_id  # noqa: E402
 
 
 def create_test_database() -> None:
@@ -88,6 +92,20 @@ def client(db_session):
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def release(client):
+    """release("fractions-multiply") opens that exit ticket to Class 5-201 (or another classroom)."""
+
+    def release_ticket(ticket_key, classroom_id=CLASSROOM_ID):
+        response = client.put(
+            f"/classrooms/{classroom_id}/exit-tickets/{ticket_id(ticket_key)}/release",
+            headers=teacher_headers(),
+        )
+        assert response.status_code == 200
+
+    return release_ticket
 
 
 @pytest.fixture

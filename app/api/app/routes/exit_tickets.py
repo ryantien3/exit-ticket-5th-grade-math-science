@@ -9,9 +9,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import events
+from app.auth import get_student_or_teacher, require_student, require_teacher
 from app.db import get_session
 from app.grading import percent, summarize_by_standard
-from app.models import Answer, ExitTicket, ExitTicketQuestion, Question, Student
+from app.models import Answer, ClassroomExitTicket, ExitTicket, ExitTicketQuestion, Question, Student
 from app.schemas import (
     LETTERS,
     Choice,
@@ -29,11 +30,35 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["exit tickets"])
 
 
+def ticket_not_found(ticket_id: uuid.UUID) -> HTTPException:
+    return HTTPException(status.HTTP_404_NOT_FOUND, f"Exit ticket not found: {ticket_id}")
+
+
 def get_ticket_or_404(session: Session, ticket_id: uuid.UUID) -> ExitTicket:
     ticket = session.get(ExitTicket, ticket_id)
     if ticket is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Exit ticket not found: {ticket_id}")
+        raise ticket_not_found(ticket_id)
     return ticket
+
+
+def get_open_ticket_or_404(session: Session, ticket_id: uuid.UUID, student: Student | None) -> ExitTicket:
+    """The ticket, if this viewer may see it: teachers (student=None) see every ticket;
+    students only see tickets released to their classroom. A hidden ticket gets the same
+    404 as one that doesn't exist, so students can't find out which tickets are coming."""
+    ticket = get_ticket_or_404(session, ticket_id)
+    if student is not None and session.get(ClassroomExitTicket, (student.classroom_id, ticket_id)) is None:
+        raise ticket_not_found(ticket_id)
+    return ticket
+
+
+def question_count():
+    """A "count this ticket's questions" subquery, for use as a column next to ExitTicket."""
+    return (
+        select(func.count())
+        .where(ExitTicketQuestion.ticket_id == ExitTicket.id)
+        .scalar_subquery()
+        .label("question_count")
+    )
 
 
 def get_ticket_questions(session: Session, ticket_id: uuid.UUID) -> list[tuple[int, Question]]:
@@ -55,25 +80,25 @@ def id_list(ids) -> str:
     return ", ".join(str(i) for i in ids)
 
 
-@router.get("/exit-tickets", response_model=list[ExitTicketSummary])
+@router.get(
+    "/exit-tickets",
+    response_model=list[ExitTicketSummary],
+    dependencies=[Depends(require_teacher)],  # students use /me/exit-tickets
+)
 def list_exit_tickets(session: Session = Depends(get_session)) -> list[ExitTicketSummary]:
     rows = session.execute(
-        select(
-            ExitTicket.id,
-            ExitTicket.title,
-            ExitTicket.subject,
-            func.count(ExitTicketQuestion.question_id).label("question_count"),
-        )
-        .outerjoin(ExitTicketQuestion, ExitTicketQuestion.ticket_id == ExitTicket.id)
-        .group_by(ExitTicket.id)
-        .order_by(ExitTicket.title)
+        select(ExitTicket.id, ExitTicket.title, ExitTicket.subject, question_count()).order_by(ExitTicket.title)
     )
     return [ExitTicketSummary(**row._mapping) for row in rows]
 
 
 @router.get("/exit-tickets/{ticket_id}", response_model=ExitTicketDetail)
-def get_exit_ticket(ticket_id: uuid.UUID, session: Session = Depends(get_session)) -> ExitTicketDetail:
-    ticket = get_ticket_or_404(session, ticket_id)
+def get_exit_ticket(
+    ticket_id: uuid.UUID,
+    student: Student | None = Depends(get_student_or_teacher),
+    session: Session = Depends(get_session),
+) -> ExitTicketDetail:
+    ticket = get_open_ticket_or_404(session, ticket_id, student)
     # Built from StudentQuestion, which has no correct answer or explanation fields:
     # anything sent here is visible in the browser's network tab.
     questions = [
@@ -95,9 +120,13 @@ def get_exit_ticket(ticket_id: uuid.UUID, session: Session = Depends(get_session
     status_code=status.HTTP_201_CREATED,
 )
 def submit_exit_ticket(
-    ticket_id: uuid.UUID, submission: SubmissionIn, session: Session = Depends(get_session)
+    ticket_id: uuid.UUID,
+    submission: SubmissionIn,
+    student: Student = Depends(require_student),
+    session: Session = Depends(get_session),
 ) -> SubmissionOut:
-    get_ticket_or_404(session, ticket_id)
+    # Also rejects a ticket the teacher hid again after the student opened it.
+    get_open_ticket_or_404(session, ticket_id, student)
     ticket_questions = get_ticket_questions(session, ticket_id)
     questions = {question.id: question for _, question in ticket_questions}
 
@@ -112,10 +141,6 @@ def submit_exit_ticket(
     missing = [qid for qid in questions if qid not in set(submitted_ids)]
     if missing:
         raise unprocessable(f"Every question must be answered. Missing: {id_list(missing)}")
-
-    student = session.get(Student, submission.student_id)
-    if student is None:
-        raise unprocessable(f"Unknown student: {submission.student_id}")
 
     already_submitted = session.scalar(
         select(func.count())
