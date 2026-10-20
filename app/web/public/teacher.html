@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Exit Ticket · Teacher</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="stylesheet" href="css/teacher.css">
+  <script type="module" src="js/teacher.js"></script>
+</head>
+<body class="teacher">
+  <header class="site-header">
+    <p class="brand">Exit Ticket · Teacher</p>
+    <div id="signed-in" class="signed-in" hidden>
+      <button type="button" id="sign-out" class="button header-button">Sign out</button>
+    </div>
+  </header>
+
+  <main class="page">
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+
+    <noscript>
+      <p class="card">This page needs JavaScript turned on.</p>
+    </noscript>
+
+    <section id="screen-error" class="screen" hidden>
+      <h1 tabindex="-1">Something went wrong</h1>
+      <p id="error-message" class="lead"></p>
+      <div class="actions">
+        <button type="button" id="error-action" class="button primary">Try again</button>
+      </div>
+    </section>
+
+    <section id="screen-sign-in" class="screen narrow" hidden>
+      <h1 tabindex="-1">Teacher sign-in</h1>
+      <p id="sign-in-message" class="notice" role="status" hidden></p>
+      <form id="sign-in-form" novalidate>
+        <label for="passcode" class="field-label">Teacher passcode</label>
+        <input id="passcode" class="text-input" type="password" autocomplete="current-password"
+               aria-describedby="passcode-error">
+        <p id="passcode-error" class="field-error" hidden></p>
+        <div class="actions">
+          <button type="submit" id="sign-in-button" class="button primary">Sign in</button>
+        </div>
+      </form>
+      <p class="teacher-link"><a href="./">Back to the student page</a></p>
+    </section>
+
+    <section id="screen-dashboard" class="screen" hidden>
+      <div class="dashboard-top">
+        <h1 tabindex="-1">Class dashboard</h1>
+        <div class="classroom-picker">
+          <label for="classroom-select" class="field-label">Classroom</label>
+          <select id="classroom-select" class="text-input"></select>
+        </div>
+      </div>
+
+      <!-- Auto-refresh controls. Content that updates on its own needs a way to pause it. -->
+      <div class="refresh-bar">
+        <p id="refresh-status" class="refresh-status"></p>
+        <p id="refresh-alert" class="refresh-alert" role="alert" hidden></p>
+        <div class="refresh-buttons">
+          <button type="button" id="refresh-now" class="button secondary small">Refresh now</button>
+          <button type="button" id="pause-refresh" class="button secondary small" aria-pressed="false">Pause auto-refresh</button>
+        </div>
+      </div>
+
+      <div class="dashboard-grid">
+        <div class="dashboard-main">
+          <section class="panel" aria-labelledby="mastery-heading">
+            <h2 id="mastery-heading">Class mastery by standard</h2>
+            <div id="mastery-tables"></div>
+          </section>
+
+          <section class="panel" aria-labelledby="tickets-heading">
+            <h2 id="tickets-heading">Exit tickets</h2>
+            <p class="panel-intro">Students only see released exit tickets. Hiding one stops new submissions.</p>
+            <ul id="ticket-releases" class="release-list"></ul>
+          </section>
+        </div>
+
+        <section class="panel dashboard-side" aria-labelledby="activity-heading">
+          <h2 id="activity-heading">Recent activity</h2>
+          <ol id="activity-feed" class="activity-feed"></ol>
+          <p id="activity-empty" class="panel-intro" hidden>No submissions yet. They'll show up here as students finish.</p>
+        </section>
+      </div>
+
+      <section class="panel" aria-labelledby="heatmap-heading">
+        <h2 id="heatmap-heading">Students by standard</h2>
+        <!-- Levels mirror the thresholds in app/api/app/grading.py. -->
+        <ul class="legend" aria-label="Legend">
+          <li><span class="badge level-mastered"><span aria-hidden="true">✓</span> Mastered</span> 80% or more</li>
+          <li><span class="badge level-approaching"><span aria-hidden="true">◐</span> Approaching</span> 60–79%</li>
+          <li><span class="badge level-needs-support"><span aria-hidden="true">!</span> Needs support</span> under 60%</li>
+          <li><span class="badge level-none">Blank</span> not attempted yet</li>
+        </ul>
+        <label class="check-label">
+          <input type="checkbox" id="needs-support-only"> Show only students who need support
+        </label>
+        <div class="table-scroll" tabindex="0" role="region" aria-labelledby="heatmap-heading">
+          <table id="heatmap" class="heatmap"></table>
+        </div>
+        <p id="heatmap-empty" class="panel-intro" hidden>No students need support right now.</p>
+      </section>
+
+      <section class="panel" aria-labelledby="codes-heading">
+        <h2 id="codes-heading">Student codes</h2>
+        <details id="codes">
+          <summary>Show student codes</summary>
+          <p class="panel-intro">Each student signs in with their own code. Don't show this on the projector.</p>
+          <table class="data-table codes-table">
+            <thead><tr><th scope="col">Student</th><th scope="col">Code</th></tr></thead>
+            <tbody id="codes-body"></tbody>
+          </table>
+        </details>
+      </section>
+    </section>
+  </main>
+</body>
+</html>

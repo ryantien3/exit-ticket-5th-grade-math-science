@@ -1,42 +1,32 @@
 import uuid
 
-from app.models import Classroom, Student
 from seed_data import STANDARDS
-from seed_helpers import CLASSROOM_ID, answers_for, student_id, ticket_id
+from seed_helpers import CLASSROOM_ID, add_other_classroom, student_id, submit, teacher_headers
 
 
-def submit(client, ticket_key, student, wrong=()):
-    response = client.post(
-        f"/exit-tickets/{ticket_id(ticket_key)}/submissions",
-        json={"student_id": student, "answers": answers_for(ticket_key, wrong=wrong)},
-    )
-    assert response.status_code == 201
-
-
-def test_classroom_mastery(client, db_session, published_events):
+def test_classroom_mastery(client, db_session, published_events, release):
+    for ticket in ("fractions-add-subtract", "fractions-multiply", "decimals-place-value-rounding"):
+        release(ticket)
     # NY-5.NF.1: student 0 gets 4/4, student 1 gets 2/4 -> 6/8 = 75.0% approaching
-    submit(client, "fractions-add-subtract", student_id(0))
-    submit(client, "fractions-add-subtract", student_id(1), wrong=("nf1-1", "nf1-2"))
+    assert submit(client, "fractions-add-subtract", 0).status_code == 201
+    assert submit(client, "fractions-add-subtract", 1, wrong=("nf1-1", "nf1-2")).status_code == 201
     # NY-5.NF.4: 3/3 -> 100.0% mastered
-    submit(client, "fractions-multiply", student_id(0))
+    assert submit(client, "fractions-multiply", 0).status_code == 201
     # NY-5.NBT.3 (0/2) and NY-5.NBT.4 (0/3): everything wrong -> needs support
-    submit(
+    assert submit(
         client,
         "decimals-place-value-rounding",
-        student_id(1),
+        1,
         wrong=("nbt3-1", "nbt3-3", "nbt4-1", "nbt4-2", "nbt4-5"),
-    )
+    ).status_code == 201
 
     # A student in another classroom must not count toward Class 5-201.
-    other_classroom = Classroom(id=uuid.uuid4(), name="Class 5-999")
-    other_student = Student(id=uuid.uuid4(), classroom_id=other_classroom.id, display_name="Test Z.")
-    db_session.add(other_classroom)
-    db_session.flush()
-    db_session.add(other_student)
-    db_session.flush()
-    submit(client, "fractions-multiply", str(other_student.id), wrong=("nf4-1", "nf4-2", "nf4-3"))
+    other_classroom, other_student = add_other_classroom(db_session)
+    release("fractions-multiply", classroom_id=other_classroom)
+    wrong = ("nf4-1", "nf4-2", "nf4-3")
+    assert submit(client, "fractions-multiply", other_student, wrong=wrong).status_code == 201
 
-    response = client.get(f"/classrooms/{CLASSROOM_ID}/mastery")
+    response = client.get(f"/classrooms/{CLASSROOM_ID}/mastery", headers=teacher_headers())
     assert response.status_code == 200
     body = response.json()
     assert body["classroom_name"] == "Class 5-201"
@@ -53,8 +43,9 @@ def test_classroom_mastery(client, db_session, published_events):
     assert summary("NY-5.NBT.3") == (2, 0, 0.0, "needs support")
     assert summary("NY-5.NBT.4") == (3, 0, 0.0, "needs support")
     assert summary("5-PS1-1") == (0, 0, None, None)  # no answers yet
+    assert student_id(0) not in response.text  # class view has no per-student data
 
 
 def test_unknown_classroom_is_404(client):
-    response = client.get(f"/classrooms/{uuid.uuid4()}/mastery")
+    response = client.get(f"/classrooms/{uuid.uuid4()}/mastery", headers=teacher_headers())
     assert response.status_code == 404

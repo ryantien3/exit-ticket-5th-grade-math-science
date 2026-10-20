@@ -8,7 +8,7 @@ from fastapi import FastAPI
 
 from app.config import get_settings
 from app.logging_config import configure_logging
-from app.routes import classrooms, exit_tickets, health, standards
+from app.routes import classrooms, exit_tickets, health, me, sessions, standards
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -25,5 +25,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="Exit Ticket API", lifespan=lifespan)
 app.include_router(health.router)
 app.include_router(standards.router)
+app.include_router(sessions.router)
+app.include_router(me.router)
 app.include_router(exit_tickets.router)
 app.include_router(classrooms.router)

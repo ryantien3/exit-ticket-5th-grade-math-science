@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Exit Ticket</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <script type="module" src="js/student.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <p class="brand">Exit Ticket</p>
+    <div id="signed-in" class="signed-in" hidden>
+      <p id="who" class="who"></p>
+      <button type="button" id="sign-out" class="button header-button">I'm done</button>
+    </div>
+  </header>
+
+  <main class="page">
+    <!-- Screen readers announce changes to this text (e.g. "Loading..."). -->
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+
+    <noscript>
+      <p class="card">This page needs JavaScript turned on. Ask your teacher for help.</p>
+    </noscript>
+
+    <section id="screen-error" class="screen" hidden>
+      <h1 tabindex="-1">Uh-oh!</h1>
+      <p id="error-message" class="lead"></p>
+      <div class="actions">
+        <button type="button" id="error-action" class="button primary">Try again</button>
+      </div>
+    </section>
+
+    <section id="screen-sign-in" class="screen" hidden>
+      <h1 tabindex="-1">Hi there! Let's get started.</h1>
+      <p id="sign-in-message" class="notice" role="status" hidden></p>
+      <form id="sign-in-form" novalidate>
+        <label for="login-code" class="field-label">Type your secret code</label>
+        <p id="login-code-hint" class="hint">It's on the card from your teacher: 6 letters and numbers.</p>
+        <!-- Phones and iPads: no autocorrect or auto-capitals messing with the code. -->
+        <input id="login-code" class="text-input code-input" type="text" maxlength="12"
+               autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false"
+               aria-describedby="login-code-hint login-code-error">
+        <p id="login-code-error" class="field-error" hidden></p>
+        <div class="actions">
+          <button type="submit" id="sign-in-button" class="button primary">Let's go!</button>
+        </div>
+      </form>
+      <p class="teacher-link"><a href="teacher.html">Teacher? Open the teacher dashboard</a></p>
+    </section>
+
+    <section id="screen-ticket" class="screen" hidden>
+      <h1 tabindex="-1">Your exit tickets</h1>
+      <p id="no-tickets" class="lead" hidden>
+        No exit tickets are open right now. Your teacher will tell you when it's time!
+      </p>
+      <ul id="ticket-list" class="ticket-list"></ul>
+      <div class="actions">
+        <button type="button" id="check-again" class="button secondary">Check for new exit tickets</button>
+      </div>
+    </section>
+
+    <section id="screen-question" class="screen" hidden>
+      <p id="progress-text" class="progress-text"></p>
+      <div class="progress-bar" aria-hidden="true"><div id="progress-fill" class="progress-fill"></div></div>
+      <form id="question-form">
+        <fieldset class="question">
+          <legend><h1 id="question-prompt" class="prompt" tabindex="-1"></h1></legend>
+          <div id="choices" class="choices"></div>
+        </fieldset>
+        <div class="actions">
+          <button type="button" id="back-button" class="button secondary">Back</button>
+          <button type="submit" id="next-button" class="button primary">Next</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="screen-review" class="screen" hidden>
+      <h1 tabindex="-1">Check your answers</h1>
+      <p class="lead">You can change any answer before you turn it in.</p>
+      <ol id="review-list" class="card-list"></ol>
+      <div class="actions">
+        <button type="button" id="review-back" class="button secondary">Back</button>
+        <button type="button" id="submit-button" class="button primary">Turn it in!</button>
+      </div>
+    </section>
+
+    <section id="screen-results" class="screen" hidden>
+      <h1 id="score-heading" tabindex="-1"></h1>
+      <p id="score-message" class="lead"></p>
+      <ol id="results-list" class="card-list"></ol>
+      <div class="actions">
+        <button type="button" id="another-ticket" class="button primary">Back to my exit tickets</button>
+        <button type="button" id="done-button" class="button secondary">I'm done</button>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

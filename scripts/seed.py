@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app" / "api"))
 from sqlalchemy import Connection, Table  # noqa: E402
 from sqlalchemy.dialects.postgresql import insert  # noqa: E402
 
+from app.auth import new_login_code  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.db import get_engine  # noqa: E402
 from app.logging_config import configure_logging  # noqa: E402
@@ -68,10 +69,21 @@ def validate() -> None:
             assert subjects[standard] == t["subject"], f"{t['key']}: {key} is the wrong subject"
 
 
-def upsert(connection: Connection, table: Table, rows: list[dict], key_columns: list[str]) -> None:
+def upsert(
+    connection: Connection,
+    table: Table,
+    rows: list[dict],
+    key_columns: list[str],
+    insert_only: tuple[str, ...] = (),
+) -> None:
+    """insert_only: columns set when a row is first created and never overwritten after."""
     statement = insert(table).values(rows)
     # Only overwrite columns the seed provides, so e.g. created_at keeps its first value.
-    updates = {name: statement.excluded[name] for name in rows[0] if name not in key_columns}
+    updates = {
+        name: statement.excluded[name]
+        for name in rows[0]
+        if name not in key_columns and name not in insert_only
+    }
     connection.execute(statement.on_conflict_do_update(index_elements=key_columns, set_=updates))
 
 
@@ -133,10 +145,14 @@ def seed(connection: Connection) -> None:
                 "id": stable_id("student", f"{CLASSROOM_NAME}:{name}"),
                 "classroom_id": classroom_id,
                 "display_name": name,
+                # Random, so codes can't be worked out from this public repo. insert_only keeps
+                # a student's code the same when the seed is run again.
+                "login_code": new_login_code(),
             }
             for name in student_display_names()
         ],
         ["id"],
+        insert_only=("login_code",),
     )
 
 
