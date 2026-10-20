@@ -12,7 +12,17 @@ and Pub/Sub in mind. The ACE exam notes at the end connect each local piece to t
 > **About the commands in this doc.** Each code block contains commands only, no `#` comments. In zsh (the macOS
 > default shell), `#` is **not** a comment unless `setopt interactivecomments` is on, so a pasted `# note` becomes
 > extra arguments. This created stray folders and files three times in this project (see
-> [Lessons learned](#13-lessons-learned)).
+> [Lessons learned](#15-lessons-learned)).
+
+> **Placeholders used below.** Replace these with your own values when you run a command. Never commit the real
+> values; the secrets live only in `app/api/.env`, which is gitignored.
+>
+> | Placeholder | Meaning |
+> |---|---|
+> | `YOUR_TEACHER_PASSCODE` | The `TEACHER_PASSCODE` you set in `app/api/.env` |
+> | `STUDENT_CODE` | A student's 6-character login code (teachers see them at `/classrooms/{id}/students`) |
+> | `TEACHER_TOKEN`, `STUDENT_TOKEN` | The `token` returned by a sign-in endpoint |
+> | `CLASSROOM_ID`, `TICKET_ID`, `QUESTION_ID` | UUIDs from the list endpoints |
 
 **Contents**
 
@@ -28,8 +38,10 @@ and Pub/Sub in mind. The ACE exam notes at the end connect each local piece to t
 10. [Testing](#10-testing)
 11. [The web apps](#11-the-web-apps)
 12. [nginx as a reverse proxy](#12-nginx-as-a-reverse-proxy)
-13. [Lessons learned](#13-lessons-learned)
-14. [ACE exam notes](#ace-exam-notes)
+13. [Known limitations](#13-known-limitations)
+14. [Interview talking points](#14-interview-talking-points)
+15. [Lessons learned](#15-lessons-learned)
+16. [ACE exam notes](#ace-exam-notes)
 
 ---
 
@@ -65,7 +77,11 @@ Postgres 16 container ("db")  ── data in the named volume "pgdata"
 browser sends them to whichever server served the page. That means:
 - **no CORS setup** is needed, because the page and the API share one origin;
 - **no API address is hardcoded** in the JavaScript;
+- **nginx strips the `/api` prefix itself**, so on GKE the Ingress doesn't need path rewriting, which GKE's built-in
+  Ingress can't do;
 - the same files work on a laptop and on GKE.
+
+Both of these are explained in [Why a reverse proxy: no CORS, no Ingress rewrites](#why-a-reverse-proxy-no-cors-no-ingress-rewrites).
 
 ---
 
@@ -158,6 +174,36 @@ docker compose up -d db web
 | http://localhost:8080/teacher.html | Teacher dashboard |
 | http://localhost:8000/docs | Interactive API docs (served by FastAPI directly) |
 
+The first time on a fresh database (or after pulling a new migration), also run these from `app/api` before
+starting uvicorn:
+```bash
+.venv/bin/alembic upgrade head
+.venv/bin/python ../../scripts/seed.py
+```
+
+### Stopping everything
+
+1. In the uvicorn tab, press **Ctrl+C**.
+2. Then, from the repo root, use **one** of these:
+
+```bash
+docker compose stop
+```
+```bash
+docker compose down
+```
+```bash
+docker compose down -v
+```
+
+| Command | Containers | Database data |
+|---|---|---|
+| `docker compose stop` | stopped, kept (fastest to start again) | kept |
+| `docker compose down` | removed | kept (in the `pgdata` volume) |
+| `docker compose down -v` | removed | **deleted**: re-run migrations and the seed afterwards |
+
+Nothing in Phase 2 runs in the cloud, so stopping costs nothing and there's no cloud teardown to do.
+
 ---
 
 ## 3. Data model
@@ -202,6 +248,24 @@ classrooms ┼── students ───┼── answers                        
 - **No submissions table.** A "submission" is all of one student's answers for one ticket; the unique rule above
   makes that grouping unambiguous.
 
+### Why `standard_code` is stored on each answer
+
+Strictly speaking, it's duplicate data: the question already knows its standard. Copying it onto every answer row
+(a deliberate **denormalization**) pays off three ways:
+
+1. **The most common question is cheap.** "How is this class doing on NY-5.NF.1?" becomes a `GROUP BY
+   answers.standard_code`, with no join to `questions` on every dashboard refresh. An index on
+   `(standard_code, answered_at)` supports it.
+2. **The analytics pipeline needs it.** Each answer event sent to Pub/Sub, and later each BigQuery row, is
+   **self-contained**: it already says which standard it measures. BigQuery is fastest with wide, flat tables, and
+   Looker Studio can group by standard without joining back to Postgres.
+3. **It can't go wrong.** Duplicated data normally risks drifting out of sync. Here a composite foreign key,
+   `(question_id, standard_code) → questions(id, standard_code)`, makes the database itself reject an answer whose
+   copy disagrees with its question.
+
+The general lesson: normalize by default, and denormalize **on purpose**, for a read path you can name, with a
+constraint that keeps the copy honest.
+
 ---
 
 ## 4. Migrations with Alembic
@@ -209,6 +273,23 @@ classrooms ┼── students ───┼── answers                        
 A **migration** is a versioned, reviewable script that changes the database's structure. The tables are only ever
 created by migrations, never by `Base.metadata.create_all()`. That way every environment (laptop, test DB, Cloud SQL)
 goes through the same steps, in the same order.
+
+### Why migrations instead of `create_all()`
+
+SQLAlchemy's `Base.metadata.create_all()` creates any table that's missing, straight from the models. It's tempting
+for a first version, but it falls apart as soon as the app has real data:
+
+| | `create_all()` | Alembic migrations |
+|---|---|---|
+| Changing an **existing** table (add a column, a constraint) | Can't. It only creates missing tables, and silently skips existing ones. | Each change is a script: `0002` added `login_code` to a table full of students |
+| Existing rows | No way to fill in new columns | The script can backfill data (expand → backfill → contract) |
+| History | None: you can't tell what state a database is in | `alembic_version` records exactly which migration each database is at |
+| Undo | None | `downgrade` steps back |
+| Review | Changes happen invisibly at app startup | Each change is a file in a pull request, reviewed like code |
+| Multiple app copies | Every pod would race to change the schema at startup | Migrations run once, as a deployment step |
+
+The test suite also builds its database with `alembic upgrade head`, not `create_all()`. So tests run against
+exactly the schema production will have, and a broken migration fails the tests.
 
 ```
 0001_create_core_tables  →  0002_login_codes_and_releases   (head)
@@ -302,6 +383,59 @@ request → router → dependencies (session, auth) → body validation (Pydanti
 | GET | `/classrooms`, `/classrooms/{id}/students` (with login codes), `/classrooms/{id}/exit-tickets` | teacher |
 | PUT / DELETE | `/classrooms/{id}/exit-tickets/{ticket_id}/release` | teacher |
 | GET | `/classrooms/{id}/mastery`, `/mastery/students`, `/recent-submissions?limit=1-50` | teacher |
+
+### Server-side grading and hidden answers
+
+The browser is never trusted with the answer key:
+
+- **What students receive:** `GET /exit-tickets/{id}` returns each question's prompt and choices, built from the
+  `StudentQuestion` response model. That model has **no** `correct_choice` or `explanation` field, so they can't be
+  sent even by mistake. Anything sent to a browser is visible in its developer tools, so "the page just doesn't show
+  it" would not be enough. A test checks every ticket's response for answer-key fields and explanation text.
+- **What students send:** only their chosen letters (`{"question_id": ..., "chosen_choice": "B"}`). `extra="forbid"`
+  rejects anything else, such as `is_correct`.
+- **Grading:** the **server** compares each letter with `correct_choice`, saves `is_correct`, and only then returns
+  the score, the correct answers and the explanations.
+- **Who submitted:** the student comes from the sign-in token, not the request body.
+- **No retakes:** one submission per student per ticket; a second attempt gets 409.
+- **Unreleased tickets** return 404 to students, so they can't preview questions by guessing ticket IDs.
+
+### Trying the API with curl
+
+These go straight to uvicorn on port 8000. Through nginx, use `http://localhost:8080/api/...` instead. Sign in as the
+teacher and copy the `token` from the response:
+```bash
+curl -s -X POST http://localhost:8000/teacher-sessions -H "Content-Type: application/json" -d '{"passcode": "YOUR_TEACHER_PASSCODE"}'
+```
+List classrooms, then a class's students with their codes, then its exit tickets:
+```bash
+curl -s http://localhost:8000/classrooms -H "Authorization: Bearer TEACHER_TOKEN"
+curl -s http://localhost:8000/classrooms/CLASSROOM_ID/students -H "Authorization: Bearer TEACHER_TOKEN"
+curl -s http://localhost:8000/classrooms/CLASSROOM_ID/exit-tickets -H "Authorization: Bearer TEACHER_TOKEN"
+```
+Release a ticket to that class (use `-X DELETE` to hide it again):
+```bash
+curl -s -X PUT http://localhost:8000/classrooms/CLASSROOM_ID/exit-tickets/TICKET_ID/release -H "Authorization: Bearer TEACHER_TOKEN"
+```
+Sign in as a student, then see that student's released tickets and one ticket's questions:
+```bash
+curl -s -X POST http://localhost:8000/student-sessions -H "Content-Type: application/json" -d '{"login_code": "STUDENT_CODE"}'
+curl -s http://localhost:8000/me/exit-tickets -H "Authorization: Bearer STUDENT_TOKEN"
+curl -s http://localhost:8000/exit-tickets/TICKET_ID -H "Authorization: Bearer STUDENT_TOKEN"
+```
+Submit answers. The `answers` list needs one entry per question on the ticket:
+```bash
+curl -s -X POST http://localhost:8000/exit-tickets/TICKET_ID/submissions -H "Authorization: Bearer STUDENT_TOKEN" -H "Content-Type: application/json" -d '{"answers": [{"question_id": "QUESTION_ID", "chosen_choice": "B"}]}'
+```
+Then look at the teacher views:
+```bash
+curl -s http://localhost:8000/classrooms/CLASSROOM_ID/mastery -H "Authorization: Bearer TEACHER_TOKEN"
+curl -s http://localhost:8000/classrooms/CLASSROOM_ID/mastery/students -H "Authorization: Bearer TEACHER_TOKEN"
+curl -s "http://localhost:8000/classrooms/CLASSROOM_ID/recent-submissions?limit=5" -H "Authorization: Bearer TEACHER_TOKEN"
+```
+The quotes around the last URL matter: without them, zsh treats `?` as a filename wildcard. The interactive docs at
+http://localhost:8000/docs do all of this with buttons: sign in, paste the token into **Authorize**, then
+**Try it out** on any endpoint.
 
 ### HTTP status codes used
 
@@ -580,7 +714,46 @@ fine for a few classrooms. See the ACE notes for the Pub/Sub version.
 ## 12. nginx as a reverse proxy
 
 A **reverse proxy** receives the browser's requests and forwards some of them to another server. It returns that
-server's answer as if it were its own. [`app/web/nginx.conf`](../app/web/nginx.conf), condensed:
+server's answer as if it were its own.
+
+### Why a reverse proxy: no CORS, no Ingress rewrites
+
+**1. No CORS.** Browsers enforce the **same-origin policy**. An *origin* is scheme + host + **port**, so
+`localhost:8080` and `localhost:8000` are different origins. If the page (from `:8080`) called the API (on `:8000`)
+directly, the browser would block the responses unless the API sent **CORS** headers
+(`Access-Control-Allow-Origin` and friends). Worse, every JSON `POST` or request with an `Authorization` header would
+first trigger a **preflight** `OPTIONS` request: an extra round trip each time. CORS settings also differ per
+environment and are easy to get dangerously wrong (`Allow-Origin: *`).
+
+With nginx in front, the page and `/api/...` both come from `:8080`: **one origin, so CORS never comes up**. The API
+has no CORS configuration at all.
+
+**2. No path rewriting needed on GKE.** On GKE, internet traffic arrives through an **Ingress**. GKE's built-in
+Ingress controller turns it into a Google **external Application Load Balancer**. An Ingress can route by path, for
+example `/api/*` to the API's Service, but:
+- the Kubernetes Ingress spec has **no rewrite field**;
+- GKE's Ingress controller offers no rewrite annotation (unlike the community ingress-nginx controller's
+  `rewrite-target`).
+
+So the API would receive `/api/exit-tickets` and return 404, unless the API were changed to serve everything under
+`/api` or rewriting were done somewhere else.
+
+This design sidesteps all of that:
+- The Ingress needs **one rule**: everything goes to the `web` Service.
+- nginx, inside the web pod, serves the static files and proxies `/api/` to the API's internal Service, stripping the
+  prefix exactly as it does on the laptop.
+- **The API is never exposed to the internet.** Its Service can be `ClusterIP` (cluster-internal only): a smaller
+  attack surface, and one load-balancer backend and health check instead of two.
+
+(The newer **Gateway API** on GKE can rewrite paths, so it's an alternative. The nginx approach works the same with
+either, and identically on a laptop.)
+
+**The trade-off:** every API call takes one extra hop through nginx, and the web pods have to be scaled to carry API
+traffic too. At this scale, both are negligible.
+
+### The configuration
+
+[`app/web/nginx.conf`](../app/web/nginx.conf), condensed:
 
 ```nginx
 upstream api {
@@ -663,7 +836,96 @@ docker compose restart web
 
 ---
 
-## 13. Lessons learned
+## 13. Known limitations
+
+Phase 2 is a working product on a laptop, not a production system. These gaps are deliberate, and each has a planned
+fix:
+
+| Limitation | Why it's acceptable for now | Planned fix |
+|---|---|---|
+| **Basic sign-in:** one shared teacher passcode, no per-teacher accounts; every teacher can see every classroom | Enough to lock the teacher views down during development | **IAP** with Google identities in front of the teacher pages (Phase 3+) |
+| **No brute-force protection** on student sign-in | About 887 million possible codes, and it only runs locally | **Cloud Armor** rate limiting on `POST /student-sessions` |
+| **Tokens can't be revoked** before they expire (2 h students, 8 h teachers) | Short lifetimes limit the damage; rotating `SESSION_SECRET` signs everyone out | A server-side session list, if it's ever needed |
+| **No "reset this student's code"** endpoint; codes stored as plain text | Teachers must be able to read codes; they're random, not reused passwords | A small teacher endpoint to issue a new code |
+| **Polling, not real-time:** the dashboard refreshes every 15 seconds | Simple and robust; about 4 small requests per 15 s per open dashboard | **Pub/Sub** + Server-Sent Events (Phase 6) |
+| **Synthetic data only:** 1 classroom, 24 made-up students, 45 seeded questions; no screens for creating classes or questions | The project rule: never real student data. The seed script is the only way data gets in. | Teacher authoring tools (not planned yet) |
+| **Mastery is calculated live** in Postgres on every request; there's no history over time | Fast at class size | **BigQuery** + Looker Studio for history and trends (Phase 6) |
+| **In-progress answers live only in the browser tab.** A refresh mid-ticket, or a sign-in expiring mid-quiz, loses them. | Exit tickets take minutes | Save answers as the student goes |
+| **One submission per ticket**, no retakes | Matches how exit tickets are used | A retake policy, if teachers ask for one |
+| **Runs only on a laptop:** no containers for the API, no CI, plain HTTP | That's what Phase 2 is | Containers + Artifact Registry + GKE + Cloud Build (Phase 3), HTTPS at the load balancer |
+| Light theme only, English only | Scope | Later |
+
+---
+
+## 14. Interview talking points
+
+Short, defensible stories for an interview, each one a decision plus its trade-off.
+
+**The 30-second version.** "I built a classroom quiz platform for NYC 5th graders that tags every question with a New
+York State standard, so teachers see mastery per standard in real time. It's a FastAPI + Postgres API with a plain
+JavaScript front end behind nginx. I built it locally first, but cloud-shaped, so moving it to GKE Autopilot, Cloud
+SQL and Pub/Sub is mostly packaging, not rewriting."
+
+**1. "Local-first, but cloud-shaped."** Config comes only from environment variables, which become a ConfigMap and
+Secret Manager on GKE. Logs are JSON lines with a `severity` field, which Cloud Logging understands. There are
+separate liveness and readiness endpoints for Kubernetes probes. The front end uses relative URLs behind a reverse
+proxy. Analytics events go through a single function that becomes a Pub/Sub publish later. *Why it matters to a
+customer:* the expensive part of a cloud migration is usually untangling assumptions. Here they were designed out
+up front.
+
+**2. "Security by construction, not by remembering."**
+- Response models are **allowlists**, so the answer key physically can't be serialized to a student.
+- Grading happens on the server, and the student's identity comes from a **signed token**, never from the request
+  body.
+- Teacher authorization sits on the **router**, so a new endpoint is protected automatically, and tests check every
+  teacher endpoint for 401 and 403.
+- Unreleased quizzes return **404, not 403**, so their existence isn't revealed.
+- The app refuses to start with missing or placeholder secrets.
+
+**3. "I denormalized on purpose."** `standard_code` is copied onto every answer so the hot query (mastery by
+standard) needs no join, and so each Pub/Sub/BigQuery event is self-contained. A composite foreign key makes the
+database reject any copy that disagrees with its question. That's the trade-off conversation: performance and
+analytics shape versus duplication risk, with the risk engineered away.
+
+**4. "Liveness must not depend on the database."** If it did, a database outage would make Kubernetes restart every
+pod in a loop. The database check goes in readiness, which takes the pod out of the load balancer without killing
+it. A small decision with a big blast-radius difference.
+
+**5. "Schema changes without downtime."** Adding a required `login_code` to a table full of students used **expand →
+backfill → contract**. `alembic check` proves the models match the migrations, and tests build their database from
+the migrations, so a bad migration fails CI, not production.
+
+**6. A debugging story (STAR).**
+- *Situation:* intermittent 502s from nginx even though the API was up.
+- *Task:* find out why recovery after an API restart took up to 10 seconds.
+- *Action:* nginx's error log said `no live upstreams`. `getent` showed `host.docker.internal` resolving to IPv4
+  *and* an unreachable IPv6 address, so nginx treated it as two servers and marked both down for its default
+  10 seconds. The first fix (`extra_hosts`) didn't help, and I said so instead of shipping it.
+- *Result:* an explicit upstream with `max_fails=0`, tested off → on → immediate 200.
+- *Lesson:* read the proxy's own logs first, and test recovery, not just the happy path.
+
+**7. "Polling now, Pub/Sub later, and I can explain when to switch."** Polling every 15 seconds is simple and
+correct at classroom scale. Pub/Sub plus Server-Sent Events gives about 1-second updates and no idle traffic, but
+brings long-lived connections, per-pod subscriptions, and timeouts to raise at three layers (nginx, the load
+balancer's `BackendConfig`, the app). That's the kind of right-sizing conversation a customer engineer has with a
+customer.
+
+**8. "Designed for the actual users."** 10-year-olds on shared Chromebooks: 7:1 contrast, 64px tap targets,
+keyboard-only use, no timers, tokens erased when the tab closes. Teachers: a heatmap where level is shown by symbol
++ percent + color, with a colorblind-checked palette, so "who needs help on which standard" is visible in seconds.
+Student codes are hidden by default because dashboards end up on projectors.
+
+**9. "Tests against the real database."** 87 tests run against real Postgres, each inside a rolled-back transaction,
+so they're isolated and fast (under a second). They cover the security edges: forged, expired, edited and unsigned
+tokens, and wrong-role access to every endpoint.
+
+**10. "Cost-aware from day one."** Phase 2 costs $0: everything runs on the laptop. The cloud plan uses the
+smallest viable tiers (Autopilot bills per pod request; the smallest Cloud SQL tier), and the habit of tearing down
+idle infrastructure.
+
+---
+
+## 15. Lessons learned
 
 | What happened | Cause | Lesson |
 |---|---|---|
