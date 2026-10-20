@@ -15,3 +15,4 @@ hands-on practice for the GCP Associate Cloud Engineer exam. All student data is
 
 - [x] **Phase 0:** Repo setup: project folder structure, secure `.gitignore`, CLAUDE.md
 - [x] **Phase 1:** GCP foundations: gcloud configuration, APIs, IAM, service accounts, audit logs ([notes](docs/phase-1-foundations.md))
+- [x] **Phase 2:** The application, running locally: FastAPI + Postgres API, student and teacher web apps, sign-in, nginx reverse proxy ([notes](docs/phase-2-application.md))
