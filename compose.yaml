@@ -1,7 +1,25 @@
-# Local development only: a Postgres database for the API to talk to, and nginx
-# serving the web app (and forwarding /api/ to the API) on http://localhost:8080.
+# Local development only. Two modes, chosen with compose profiles:
+#
+#   Dev mode (fastest for editing code): Postgres + nginx in containers, and uvicorn
+#   --reload in a terminal on your Mac. HTML/CSS/JS edits show up on refresh.
+#     docker compose up -d db web
+#
+#   Full-container mode (what GKE will run): Postgres, the API image and the web image,
+#   all in containers. Rebuild after code changes.
+#     docker compose --profile full up -d --build
+#
+# Both modes use http://localhost:8080, so run one at a time.
 # The credentials below are throwaway values that exist only on your laptop.
-# The API itself is not containerized yet (that's Phase 3).
+
+# Shared by both web services: the image built from app/web, for GKE's CPU type.
+x-web-image: &web-image
+  image: exit-ticket-web:dev
+  build:
+    context: ./app/web
+  platform: linux/amd64
+  # Build locally if the image is missing; never try to pull it from Docker Hub.
+  pull_policy: build
+
 services:
   db:
     image: postgres:16
@@ -11,6 +29,7 @@ services:
       POSTGRES_DB: exitticket
     ports:
       # 127.0.0.1 = reachable only from this laptop, not from other devices on the network.
+      # Published so uvicorn, pytest and the seed script on your Mac can reach it.
       - "127.0.0.1:5432:5432"
     volumes:
       # Named volume: data survives "docker compose down" (but not "down -v").
@@ -21,19 +40,51 @@ services:
       timeout: 3s
       retries: 10
 
+  # Dev mode: the web image, with your files mounted over the baked-in copies.
   web:
-    image: nginx:1.30-alpine
+    <<: *web-image
+    profiles: [dev]
     environment:
-      # Where nginx forwards /api/ requests (host:port). host.docker.internal means
-      # "the Mac running Docker", i.e. the uvicorn you start in a terminal on port 8000.
+      # host.docker.internal means "the Mac running Docker", i.e. the uvicorn you
+      # start in a terminal on port 8000.
       API_HOST: host.docker.internal:8000
     ports:
-      - "127.0.0.1:8080:80"
+      - "127.0.0.1:8080:8080"
     volumes:
       # :ro = read-only: nginx can serve these files but never change them.
       - ./app/web/public:/usr/share/nginx/html:ro
-      # Mounted as a .template so the image fills in ${API_UPSTREAM} at startup.
+      # Mounted as a .template so the image fills in ${API_HOST} at startup.
       - ./app/web/nginx.conf:/etc/nginx/templates/default.conf.template:ro
+
+  # Full-container mode: the API image. Like a ClusterIP Service on GKE, it has no
+  # published port: only other containers (nginx) can reach it, at api:8000.
+  api:
+    image: exit-ticket-api:dev
+    build:
+      context: ./app/api
+    platform: linux/amd64
+    pull_policy: build
+    profiles: [full]
+    # Secrets come from your local .env at run time; they are never in the image.
+    env_file: ./app/api/.env
+    environment:
+      # Overrides the .env value: inside a container, localhost is the container itself.
+      DATABASE_URL: postgresql+psycopg://exitticket:localdev@db:5432/exitticket
+      ENVIRONMENT: compose
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Full-container mode: the web image exactly as built, with nothing mounted.
+  web-full:
+    <<: *web-image
+    profiles: [full]
+    environment:
+      API_HOST: api:8000
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      - api
 
 volumes:
   pgdata:

@@ -187,20 +187,24 @@ starting uvicorn:
 2. Then, from the repo root, use **one** of these:
 
 ```bash
-docker compose stop
+docker compose --profile "*" stop
 ```
 ```bash
-docker compose down
+docker compose --profile "*" down
 ```
 ```bash
-docker compose down -v
+docker compose --profile "*" down -v
 ```
 
 | Command | Containers | Database data |
 |---|---|---|
-| `docker compose stop` | stopped, kept (fastest to start again) | kept |
-| `docker compose down` | removed | kept (in the `pgdata` volume) |
-| `docker compose down -v` | removed | **deleted**: re-run migrations and the seed afterwards |
+| `docker compose --profile "*" stop` | stopped, kept (fastest to start again) | kept |
+| `docker compose --profile "*" down` | removed | kept (in the `pgdata` volume) |
+| `docker compose --profile "*" down -v` | removed | **deleted**: re-run migrations and the seed afterwards |
+
+> **Updated in Phase 3A.** `web` now belongs to the `dev` compose profile, and a plain `docker compose stop` skips
+> services in profiles, so it would leave nginx running. `--profile "*"` includes every profile. See
+> [Phase 3A](phase-3a-containers.md#3-compose-profiles-two-modes-one-file).
 
 Nothing in Phase 2 runs in the cloud, so stopping costs nothing and there's no cloud teardown to do.
 

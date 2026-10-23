@@ -1,0 +1,9 @@
+# Allowlist: ignore everything, then let back in only what the image needs.
+# With two inputs, listing what's allowed is safer than guessing what isn't.
+*
+!public
+!nginx.conf
+!docker-entrypoint.d
+
+# Even inside public, never ship OS clutter.
+**/.DS_Store
