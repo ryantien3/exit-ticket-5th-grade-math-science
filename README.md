@@ -18,3 +18,4 @@ hands-on practice for the GCP Associate Cloud Engineer exam. All student data is
 - [x] **Phase 2:** The application, running locally: FastAPI + Postgres API, student and teacher web apps, sign-in, nginx reverse proxy ([notes](docs/phase-2-local-app.md))
 - [x] **Phase 3A:** Containers, locally: API and web images for linux/amd64 (non-root, no secrets baked in), full-stack compose with dev and full-container profiles, migrations as one-off containers ([notes](docs/phase-3a-containers.md))
 - [x] **Phase 3B:** Artifact Registry: Docker repository in us-east4 with immutable tags and a cleanup policy, keyless Docker auth, images tagged by git SHA and recorded by digest ([notes](docs/phase-3b-artifact-registry.md))
+- [x] **Phase 3C:** GKE Autopilot: api and web deployed by digest with a temporary Postgres, migration Job, probes, ConfigMap and Secrets, hardened non-root pods, tested via port-forward, torn down after each session ([notes](docs/phase-3c-gke.md))
