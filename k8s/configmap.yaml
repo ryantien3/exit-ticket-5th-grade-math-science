@@ -1,0 +1,14 @@
+# Non-secret settings, read by the pods as environment variables.
+# Secrets (DATABASE_URL, SESSION_SECRET, TEACHER_PASSCODE, the Postgres password) are NOT here:
+# they live in Secrets created with kubectl, never in a file in this repo.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: exit-ticket-config
+  namespace: exit-ticket
+data:
+  LOG_LEVEL: INFO
+  ENVIRONMENT: gke
+  # Where nginx forwards /api/ (host:port). The full DNS name, because nginx's resolver
+  # doesn't use Kubernetes' search domains: <service>.<namespace>.svc.cluster.local.
+  API_HOST: api.exit-ticket.svc.cluster.local:8000

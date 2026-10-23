@@ -1,0 +1,20 @@
+# Public entry point: GKE turns this into an external Application Load Balancer.
+# BILLS BY THE HOUR while it exists. Delete it BEFORE deleting the cluster, so the
+# load balancer's Google Cloud resources are cleaned up too.
+#
+# One rule: everything goes to the web Service. nginx then serves the pages and forwards
+# /api/ to the api, so the api is never exposed and no path rewriting is needed.
+# Plain HTTP for now; HTTPS, IAP and Cloud Armor come later.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  namespace: exit-ticket
+spec:
+  # No ingressClassName: GKE's default controller creates an external Application Load
+  # Balancer. Its health check comes from the web pods' readiness probe (GET / on 8080).
+  defaultBackend:
+    service:
+      name: web
+      port:
+        number: 80

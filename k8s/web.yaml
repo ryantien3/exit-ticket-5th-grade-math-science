@@ -1,0 +1,100 @@
+# nginx serving the pages and proxying /api/ to the api Service. Apply with:
+#   sed "s/PROJECT_ID/$(gcloud config get project)/g" k8s/web.yaml | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: exit-ticket
+  labels:
+    app: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        # Matches the nginx-unprivileged image's user (uid 101).
+        runAsNonRoot: true
+        runAsUser: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          # By digest: the image pushed in Phase 3B (tag ac93f06).
+          image: us-east4-docker.pkg.dev/PROJECT_ID/exit-ticket/web@sha256:e0db2a9b347f5c4064d753de9cb21c76cad647d9368fc4d665be5312e467da12
+          ports:
+            # nginx.conf says "listen 8080" (unprivileged image), so the container port is 8080.
+            - name: http
+              containerPort: 8080
+          env:
+            - name: API_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: exit-ticket-config
+                  key: API_HOST
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+              ephemeral-storage: 100Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi
+              ephemeral-storage: 100Mi
+          # Probes check nginx itself ("/"), not /api/: the web pods shouldn't be marked
+          # unhealthy just because the api is. The GKE Ingress also builds its load balancer
+          # health check from this readiness probe.
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # nginx-unprivileged keeps its pid file and temp files in /tmp...
+            - name: tmp
+              mountPath: /tmp
+            # ...and renders nginx.conf's template into conf.d at startup.
+            - name: conf
+              mountPath: /etc/nginx/conf.d
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: conf
+          emptyDir:
+            sizeLimit: 1Mi
+---
+# web.exit-ticket.svc.cluster.local:80 -> container port 8080. The Ingress points here.
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: exit-ticket
+  labels:
+    app: web
+spec:
+  type: ClusterIP
+  selector:
+    app: web
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

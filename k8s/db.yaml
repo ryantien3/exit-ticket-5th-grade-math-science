@@ -1,0 +1,106 @@
+# TEMPORARY database for Phase 3C. Replaced by Cloud SQL in Phase 4.
+#
+# Data lives in an emptyDir: it survives a container restart, but is LOST whenever the pod
+# is deleted or rescheduled (scaling to 0, a rollout, a node upgrade, deleting the cluster).
+# After that, re-run the migration Job and the seed.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: db
+  namespace: exit-ticket
+  labels:
+    app: db
+spec:
+  replicas: 1
+  # Recreate: stop the old pod before starting a new one, so two databases never run at once.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: db
+  template:
+    metadata:
+      labels:
+        app: db
+    spec:
+      # The pod never calls the Kubernetes API, so don't give it a token for it.
+      automountServiceAccountToken: false
+      securityContext:
+        # The postgres image's own user (uid/gid 999). Running as it directly means the
+        # entrypoint never needs root to change file ownership.
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        # Volumes are group-owned by 999, so Postgres can write its data directory.
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: postgres:16.15-trixie
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: exitticket
+            - name: POSTGRES_DB
+              value: exitticket
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-secrets
+                  key: POSTGRES_PASSWORD
+            # A subdirectory, so initdb gets an empty directory it owns.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          # Autopilot bills by these requests. Limits equal requests: predictable cost,
+          # and the pod is never squeezed by its neighbors.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+              ephemeral-storage: 1Gi
+            limits:
+              cpu: 100m
+              memory: 256Mi
+              ephemeral-storage: 1Gi
+          # Ready = accepting connections over TCP. "-h 127.0.0.1" matters: during first
+          # start the image runs a temporary init server on a Unix socket only, and a socket
+          # check would report ready while other pods still can't connect.
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "exitticket", "-d", "exitticket"]
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        # Scratch space that lives exactly as long as the pod.
+        - name: data
+          emptyDir:
+            sizeLimit: 1Gi
+---
+# A stable internal name for the database: db.exit-ticket.svc.cluster.local:5432.
+# ClusterIP = reachable only from inside the cluster.
+apiVersion: v1
+kind: Service
+metadata:
+  name: db
+  namespace: exit-ticket
+  labels:
+    app: db
+spec:
+  type: ClusterIP
+  selector:
+    app: db
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
