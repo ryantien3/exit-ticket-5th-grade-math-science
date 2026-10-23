@@ -1,0 +1,7 @@
+# Everything for the app lives in this namespace. Deleting it deletes everything inside.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: exit-ticket
+  labels:
+    app.kubernetes.io/part-of: exit-ticket

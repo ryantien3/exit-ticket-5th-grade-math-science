@@ -1,0 +1,127 @@
+# The FastAPI service. Apply with the project ID filled in (it is never committed):
+#   sed "s/PROJECT_ID/$(gcloud config get project)/g" k8s/api.yaml | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: exit-ticket
+  labels:
+    app: api
+spec:
+  # One copy keeps the bill small. Two would survive a pod or zone failure.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        # Matches USER 10001 in app/api/Dockerfile. runAsNonRoot makes Kubernetes refuse
+        # to start the container if it would run as root.
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          # By digest: exactly the image pushed in Phase 3B (tag ac93f06), never a moved tag.
+          image: us-east4-docker.pkg.dev/PROJECT_ID/exit-ticket/api@sha256:294082fd63314145a3693fffb52cb7ab6d368824ea67c724b6c67ec1bb02de7a
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: exit-ticket-config
+                  key: LOG_LEVEL
+            - name: ENVIRONMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: exit-ticket-config
+                  key: ENVIRONMENT
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: SESSION_SECRET
+            - name: TEACHER_PASSCODE
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: TEACHER_PASSCODE
+          # Autopilot bills by requests (it may round them up to its minimums; it records any
+          # change in the pod annotation autopilot.gke.io/resource-adjustment).
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+              ephemeral-storage: 100Mi
+            limits:
+              cpu: 100m
+              memory: 256Mi
+              ephemeral-storage: 100Mi
+          # Startup: give the process up to 60 s to answer before liveness checks begin.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          # Liveness: is the process alive? Never checks the database, so a database outage
+          # doesn't restart every api pod (the 3A test: db down -> /healthz still 200).
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Readiness: can it serve? /readyz checks Postgres. If it fails (503), the pod is
+          # taken out of the Service, not restarted, and rejoins when the database is back.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 4
+            failureThreshold: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # The root filesystem is read-only; give libraries a writable /tmp.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+# api.exit-ticket.svc.cluster.local:8000, internal only, like compose's unpublished api.
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: exit-ticket
+  labels:
+    app: api
+spec:
+  type: ClusterIP
+  selector:
+    app: api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
