@@ -1,0 +1,40 @@
+# Files Docker never sends to the builder, so they can never end up in the image.
+# The Dockerfile also COPYs only what it needs; this is the second line of defense.
+# Unlike .gitignore, a pattern here only matches at the top of the build context,
+# so "**/" is needed to match at any depth.
+
+# Secrets and local settings. Settings reach the container as environment variables.
+**/.env
+**/.env.*
+**/*.pem
+**/*-key.json
+**/*credentials*.json
+**/service-account*.json
+
+# Local Python environment: macOS binaries that wouldn't run in a Linux image anyway.
+.venv
+venv
+
+# Tests and dev-only tooling: the image runs the app, not the test suite.
+tests
+requirements-dev.txt
+pyproject.toml
+
+# Caches and build leftovers.
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+.coverage
+htmlcov
+
+# Version control, editors, OS clutter, and the Docker files themselves.
+.git
+.gitignore
+.vscode
+.idea
+**/.DS_Store
+Dockerfile
+.dockerignore
+README.md
