@@ -18,6 +18,8 @@ spec:
       labels:
         app: api
     spec:
+      # k8s/serviceaccount.yaml: Workload Identity for the proxy and the Secret Manager add-on.
+      serviceAccountName: api
       automountServiceAccountToken: false
       securityContext:
         # Matches USER 10001 in app/api/Dockerfile. runAsNonRoot makes Kubernetes refuse
@@ -26,6 +28,55 @@ spec:
         runAsUser: 10001
         seccompProfile:
           type: RuntimeDefault
+      initContainers:
+        # Cloud SQL Auth Proxy as a native sidecar (restartPolicy: Always): it starts before
+        # the api, the api waits for its startup probe, and it stops after the api.
+        - name: cloud-sql-proxy
+          # By digest: the linux/amd64 image of version 2.26.3.
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy@sha256:1d2285ce2ae05129166c2cf2eb9d481570ffd43b4755dab5384ad17ffa1194bb
+          restartPolicy: Always
+          args:
+            # Log in as the IAM database user (the Google SA), with a short-lived token.
+            - --auto-iam-authn
+            - --structured-logs
+            # The api connects to 127.0.0.1:5432, as if Postgres were in the pod.
+            - --port=5432
+            # /startup and /liveness on 9090, on all addresses so the kubelet can reach them.
+            - --health-check
+            - --http-address=0.0.0.0
+            - --http-port=9090
+            - --exit-zero-on-sigterm
+            - PROJECT_ID:us-east4:exit-ticket-db
+          ports:
+            - name: proxy-health
+              containerPort: 9090
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+              ephemeral-storage: 100Mi
+            limits:
+              cpu: 50m
+              memory: 128Mi
+              ephemeral-storage: 100Mi
+          # Passes once the proxy can connect to the instance: up to 60 s.
+          startupProbe:
+            httpGet:
+              path: /startup
+              port: proxy-health
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /liveness
+              port: proxy-health
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
       containers:
         - name: api
           # By digest: exactly the image pushed in Phase 3B (tag ac93f06), never a moved tag.
@@ -33,6 +84,7 @@ spec:
           ports:
             - name: http
               containerPort: 8000
+          # Settings only. SESSION_SECRET and TEACHER_PASSCODE are files in /var/secrets/exit-ticket.
           env:
             - name: LOG_LEVEL
               valueFrom:
@@ -46,19 +98,9 @@ spec:
                   key: ENVIRONMENT
             - name: DATABASE_URL
               valueFrom:
-                secretKeyRef:
-                  name: api-secrets
+                configMapKeyRef:
+                  name: exit-ticket-config
                   key: DATABASE_URL
-            - name: SESSION_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: api-secrets
-                  key: SESSION_SECRET
-            - name: TEACHER_PASSCODE
-              valueFrom:
-                secretKeyRef:
-                  name: api-secrets
-                  key: TEACHER_PASSCODE
           # Autopilot bills by requests (it may round them up to its minimums; it records any
           # change in the pod annotation autopilot.gke.io/resource-adjustment).
           resources:
@@ -104,10 +146,20 @@ spec:
             # The root filesystem is read-only; give libraries a writable /tmp.
             - name: tmp
               mountPath: /tmp
+            - name: app-secrets
+              mountPath: /var/secrets/exit-ticket
+              readOnly: true
       volumes:
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi
+        # Secret Manager values as files, fetched by the GKE add-on as this pod's KSA.
+        - name: app-secrets
+          csi:
+            driver: secrets-store-gke.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: app-secrets
 ---
 # api.exit-ticket.svc.cluster.local:8000, internal only, like compose's unpublished api.
 apiVersion: v1

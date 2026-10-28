@@ -1,6 +1,7 @@
-# Non-secret settings, read by the pods as environment variables.
-# Secrets (DATABASE_URL, SESSION_SECRET, TEACHER_PASSCODE, the Postgres password) are NOT here:
-# they live in Secrets created with kubectl, never in a file in this repo.
+# Non-secret settings, read by the pods as environment variables. Apply with:
+#   sed "s/PROJECT_ID/$(gcloud config get project)/g" k8s/configmap.yaml | kubectl apply -f -
+# Secrets (SESSION_SECRET, TEACHER_PASSCODE) are NOT here: they live in Secret Manager and are
+# mounted as files (k8s/secretproviderclass.yaml).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -12,3 +13,6 @@ data:
   # Where nginx forwards /api/ (host:port). The full DNS name, because nginx's resolver
   # doesn't use Kubernetes' search domains: <service>.<namespace>.svc.cluster.local.
   API_HOST: api.exit-ticket.svc.cluster.local:8000
+  # Cloud SQL through the Auth Proxy sidecar on 127.0.0.1. No password: the proxy logs in as
+  # the IAM database user with a short-lived token. %40 is the "@" in the user name.
+  DATABASE_URL: postgresql+psycopg://exit-ticket-api%40PROJECT_ID.iam@127.0.0.1:5432/exitticket

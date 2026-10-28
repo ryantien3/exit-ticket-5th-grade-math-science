@@ -1,5 +1,10 @@
 # Phase 3C — GKE Autopilot
 
+> **Superseded in Phase 4.** The temporary Postgres (`k8s/db.yaml`) and the Kubernetes Secrets
+> (`scripts/create-k8s-secrets.sh`) described here were removed in [Phase 4B](phase-4b-secrets-identity.md):
+> the database is Cloud SQL and the secrets come from Secret Manager. The GKE, probe, Ingress and teardown sections
+> still apply.
+
 Phase 3C runs the app on **GKE Autopilot** in `us-east4`: a temporary Postgres, the api and web images from
 Artifact Registry (by digest), a migration Job, and probes, Secrets and a ConfigMap, all tested end to end through
 `kubectl port-forward`, then over public HTTP through a GKE Ingress (an external Application Load Balancer). The

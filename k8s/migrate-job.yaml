@@ -22,6 +22,8 @@ spec:
       labels:
         app: migrate
     spec:
+      # Same identity as the api: the same IAM database user owns the tables.
+      serviceAccountName: api
       # Never: each retry is a new pod, so the logs of a failed try are kept.
       restartPolicy: Never
       automountServiceAccountToken: false
@@ -30,11 +32,51 @@ spec:
         runAsUser: 10001
         seccompProfile:
           type: RuntimeDefault
+      initContainers:
+        # A native sidecar, so the Job still completes: when alembic exits, Kubernetes stops
+        # the proxy. (An ordinary container here would keep the pod running forever.)
+        - name: cloud-sql-proxy
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy@sha256:1d2285ce2ae05129166c2cf2eb9d481570ffd43b4755dab5384ad17ffa1194bb
+          restartPolicy: Always
+          args:
+            - --auto-iam-authn
+            - --structured-logs
+            - --port=5432
+            - --health-check
+            - --http-address=0.0.0.0
+            - --http-port=9090
+            - --exit-zero-on-sigterm
+            - PROJECT_ID:us-east4:exit-ticket-db
+          ports:
+            - name: proxy-health
+              containerPort: 9090
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+              ephemeral-storage: 100Mi
+            limits:
+              cpu: 50m
+              memory: 128Mi
+              ephemeral-storage: 100Mi
+          # alembic starts only after this passes, so it never races the tunnel.
+          startupProbe:
+            httpGet:
+              path: /startup
+              port: proxy-health
+            periodSeconds: 2
+            failureThreshold: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
       containers:
         - name: migrate
           image: us-east4-docker.pkg.dev/PROJECT_ID/exit-ticket/api@sha256:294082fd63314145a3693fffb52cb7ab6d368824ea67c724b6c67ec1bb02de7a
           command: ["alembic", "upgrade", "head"]
-          # alembic/env.py loads the app settings, so the Job needs the same settings as the api.
+          # alembic/env.py loads the app settings, so the Job needs the same settings as the api:
+          # these from the ConfigMap, the secrets from the mounted files.
           env:
             - name: LOG_LEVEL
               valueFrom:
@@ -43,19 +85,9 @@ spec:
                   key: LOG_LEVEL
             - name: DATABASE_URL
               valueFrom:
-                secretKeyRef:
-                  name: api-secrets
+                configMapKeyRef:
+                  name: exit-ticket-config
                   key: DATABASE_URL
-            - name: SESSION_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: api-secrets
-                  key: SESSION_SECRET
-            - name: TEACHER_PASSCODE
-              valueFrom:
-                secretKeyRef:
-                  name: api-secrets
-                  key: TEACHER_PASSCODE
           resources:
             requests:
               cpu: 100m
@@ -73,7 +105,16 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            - name: app-secrets
+              mountPath: /var/secrets/exit-ticket
+              readOnly: true
       volumes:
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi
+        - name: app-secrets
+          csi:
+            driver: secrets-store-gke.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: app-secrets
