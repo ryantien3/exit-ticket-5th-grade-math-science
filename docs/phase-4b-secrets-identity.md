@@ -98,9 +98,10 @@ GKE metadata server ──► Security Token Service: the KSA's Kubernetes token
   │   principal://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/
   │     workloadIdentityPools/PROJECT_ID.svc.id.goog/subject/ns/exit-ticket/sa/api
   │
-  ├─ Secret Manager add-on: uses the principal directly → secretAccessor on each secret
-  └─ Cloud SQL Auth Proxy: the KSA annotation names exit-ticket-api@… → IAM Credentials
-       issues a token for that Google SA (allowed by workloadIdentityUser) → Cloud SQL
+  └─ the KSA annotation names exit-ticket-api@… → IAM Credentials issues a token for that
+       Google SA (allowed by workloadIdentityUser), used by both:
+         ├─ Cloud SQL Auth Proxy → Cloud SQL (cloudsql.client, cloudsql.instanceUser)
+         └─ Secret Manager add-on → secretAccessor on each secret
 ```
 
 | Part of the principal | Meaning |
@@ -116,9 +117,11 @@ GKE metadata server ──► Security Token Service: the KSA's Kubernetes token
 - **Why no key file:** tokens last about an hour, are issued only to pods running as that KSA, are revoked by
   removing a binding, and are logged. A JSON key works for anyone who copies it, from anywhere, until deleted.
 
-**One design change:** the Secret Manager add-on's documentation authenticates as the **KSA principal** and doesn't
-cover the impersonation annotation. So `secretAccessor` goes to the KSA principal; the Google SA keeps only Cloud
-SQL. Each identity has exactly one job.
+> **Corrected in [Phase 4C](phase-4c-gke-cloud-sql.md).** 4B granted `secretAccessor` to the **KSA principal**, because
+> the add-on's documentation shows that for a KSA *without* an annotation. On the first deploy the mount failed with
+> `PermissionDenied`: an **annotated** KSA makes the add-on act as the **Google SA**. The grant moved to
+> `exit-ticket-api` (still per secret), and the KSA principal grant was removed. The commands below are the working
+> ones. Rule: annotated KSA → grant the Google SA; un-annotated KSA → grant the `principal://` identifier.
 
 ---
 
@@ -139,20 +142,19 @@ gcloud artifacts repositories add-iam-policy-binding exit-ticket --location=us-e
 gcloud iam service-accounts add-iam-policy-binding exit-ticket-api@$(gcloud config get project).iam.gserviceaccount.com --role="roles/iam.workloadIdentityUser" --member="serviceAccount:$(gcloud config get project).svc.id.goog[exit-ticket/api]"
 ```
 
-### Each secret (the add-on)
+### Each secret (the add-on, acting as the Google SA)
 
 ```bash
-PROJECT_NUMBER="$(gcloud projects describe $(gcloud config get project) --format='value(projectNumber)')"
-KSA_PRINCIPAL="principal://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$(gcloud config get project).svc.id.goog/subject/ns/exit-ticket/sa/api"
-gcloud secrets add-iam-policy-binding session-secret --member="$KSA_PRINCIPAL" --role="roles/secretmanager.secretAccessor"
-gcloud secrets add-iam-policy-binding teacher-passcode --member="$KSA_PRINCIPAL" --role="roles/secretmanager.secretAccessor"
+gcloud secrets add-iam-policy-binding session-secret --member="serviceAccount:exit-ticket-api@$(gcloud config get project).iam.gserviceaccount.com" --role="roles/secretmanager.secretAccessor"
+gcloud secrets add-iam-policy-binding teacher-passcode --member="serviceAccount:exit-ticket-api@$(gcloud config get project).iam.gserviceaccount.com" --role="roles/secretmanager.secretAccessor"
 ```
+(4B first granted the KSA principal instead; 4C removed that grant with `gcloud secrets remove-iam-policy-binding`.)
 
 ### The result
 
 | Principal | Role | On |
 |---|---|---|
-| KSA principal `…/subject/ns/exit-ticket/sa/api` | `secretmanager.secretAccessor` | `session-secret`, `teacher-passcode` (one binding each) |
+| Google SA `exit-ticket-api` | `secretmanager.secretAccessor` | `session-secret`, `teacher-passcode` (one binding each) |
 | `serviceAccount:PROJECT_ID.svc.id.goog[exit-ticket/api]` | `iam.workloadIdentityUser` | Google SA `exit-ticket-api` |
 | You | `iam.serviceAccountTokenCreator` | Google SA `exit-ticket-api` (4A) |
 | Google SA `exit-ticket-api` | `cloudsql.client`, `cloudsql.instanceUser` | Project (4A; Cloud SQL has no per-instance IAM) |
@@ -173,7 +175,7 @@ gcloud artifacts repositories get-iam-policy exit-ticket --location=us-east4
 
 ```
 Secret Manager session-secret/versions/1
-  → GKE Secret Manager add-on (CSI driver on the node, as the pod's KSA principal)
+  → GKE Secret Manager add-on (CSI driver on the node, as the Google SA the pod's KSA maps to)
   → in-memory, read-only volume: /var/secrets/exit-ticket/session_secret
   → app/api/app/config.py reads the file at startup
 ```
@@ -266,8 +268,9 @@ docker run --rm -v "$PWD/k8s:/k8s:ro" ghcr.io/yannh/kubeconform:v0.7.0 -strict -
   `config.py` could read files. After this merges: `scripts/push-images.sh`, then update both digests.
 - Cluster creation needs `--service-account=exit-ticket-nodes@PROJECT_ID.iam.gserviceaccount.com` and
   `--enable-secret-manager`.
-- To confirm on the first deploy: the add-on mounts with the KSA principal grant; Workload Identity works with
-  `automountServiceAccountToken: false`; Autopilot's resource adjustments for the sidecar.
+- Left to confirm on the first deploy, all settled in [4C](phase-4c-gke-cloud-sql.md): the add-on's identity (the
+  Google SA, not the KSA principal); Workload Identity with `automountServiceAccountToken: false` (works); Autopilot
+  adjustments for the sidecar (none).
 
 ---
 
@@ -275,7 +278,7 @@ docker run --rm -v "$PWD/k8s:/k8s:ro" ghcr.io/yannh/kubeconform:v0.7.0 -strict -
 
 | What happened | Cause | Lesson |
 |---|---|---|
-| The design's "add-on via impersonation" didn't match the docs | The add-on authenticates as the KSA principal | Check the integration's own docs before granting; split roles by who actually calls the API |
+| Granted the add-on's access to the KSA principal, per its docs | Those docs cover an un-annotated KSA; ours is annotated, so the add-on acts as the Google SA (found in 4C) | Docs show one setup; test the exact combination you deploy before relying on it |
 | The manifests point at an image that can't read the new secret files | The image predates the code change | A config change is a deploy: rebuild, push, update digests |
 | `postgres-admin-password` policy is just `etag: ACAB` | No bindings; Owner inherits from the project | An empty policy is a good result for an admin secret |
 
@@ -286,8 +289,8 @@ docker run --rm -v "$PWD/k8s:/k8s:ro" ghcr.io/yannh/kubeconform:v0.7.0 -strict -
 **1. "No keys, no Kubernetes Secrets."** Pods get Google credentials from Workload Identity; the secrets are mounted
 from Secret Manager as in-memory files, so nothing sensitive is in the repo, in etcd or in environment variables.
 
-**2. "One identity per job."** The KSA principal can read exactly two secrets; the Google SA can only log in to Cloud
-SQL; the node SA can only pull from one repository and write logs. The admin password has no app access at all.
+**2. "Least privilege per identity."** The app's Google SA can read exactly two secrets and log in to Cloud SQL;
+the node SA can only pull from one repository and write logs. The admin password has no app access at all.
 
 **3. "Verify without revealing."** I checked secrets by state, length and SHA-256 fingerprint, never by printing them.
 

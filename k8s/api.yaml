@@ -79,8 +79,8 @@ spec:
               drop: ["ALL"]
       containers:
         - name: api
-          # By digest: exactly the image pushed in Phase 3B (tag ac93f06), never a moved tag.
-          image: us-east4-docker.pkg.dev/PROJECT_ID/exit-ticket/api@sha256:294082fd63314145a3693fffb52cb7ab6d368824ea67c724b6c67ec1bb02de7a
+          # By digest: exactly the image pushed in Phase 4C (tag 5fefc95), never a moved tag.
+          image: us-east4-docker.pkg.dev/PROJECT_ID/exit-ticket/api@sha256:55c56a56c22d6532f01d7622df1d9277f0cf2ad535bd28aa5772c11b3cc41f94
           ports:
             - name: http
               containerPort: 8000
