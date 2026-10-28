@@ -13,6 +13,7 @@ every question is tagged with a NY standard so teachers see mastery by standard.
 GKE Autopilot (api + web) → Cloud SQL Postgres; answer events → Pub/Sub → BigQuery → Looker Studio.
 Artifact Registry, Secret Manager, Workload Identity, Cloud Build CI/CD, Terraform with remote state in GCS.
 Region: us-east4 (zone us-east4-a).
+Roadmap: see README.md, Roadmap section (phases 0-8 mapped to ACE exam domains).
 
 ## Repo layout
 app/api (Python 3.12, FastAPI) · app/web (frontend) · infra/terraform · k8s · scripts · docs
