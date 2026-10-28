@@ -331,8 +331,8 @@ run and its output checked.
    gcloud compute firewall-rules list --format="table(name,sourceRanges.list())"
    ```
    Healthy: no clusters; `exit-ticket-db` with `STATUS` `STOPPED`; every compute list empty; only the four
-   `default-allow-*` firewall rules. (Don't check the API's `state` field: it stays `RUNNABLE` while stopped;
-   `list` combines it with `activationPolicy`.)
+   `default-allow-*` firewall rules. (`gcloud sql instances describe exit-ticket-db --format="value(state,settings.activationPolicy)"`
+   prints `STOPPED NEVER`: the stop switch is `activationPolicy`, and `state` follows it.)
 
 ### No session planned within 7 days
 
