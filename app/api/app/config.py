@@ -1,7 +1,10 @@
-"""Application settings, read from environment variables.
+"""Application settings.
 
-Real environment variables always win. A local app/api/.env file is only a fallback
-for development; in GKE there is no .env file.
+Each setting is looked up in this order, first match wins:
+1. Real environment variables.
+2. A local app/api/.env file (development only; in GKE there is none).
+3. Files in SECRETS_DIR, one per setting, named after it (e.g. session_secret). On GKE the
+   Secret Manager add-on mounts the secrets there, so no secret is an environment variable.
 """
 
 from functools import lru_cache
@@ -14,9 +17,19 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # app/api/.env, found the same way no matter which directory a command runs from.
 ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
+# Where k8s/api.yaml and k8s/migrate-job.yaml mount the secrets from Secret Manager.
+SECRETS_DIR = Path("/var/secrets/exit-ticket")
+
+
+def existing_dir(path: Path) -> Path | None:
+    """The directory if it exists, else None, so local runs don't warn about a missing mount."""
+    return path if path.is_dir() else None
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=ENV_FILE, secrets_dir=existing_dir(SECRETS_DIR), extra="ignore"
+    )
 
     # No default: the app refuses to start if DATABASE_URL is missing.
     database_url: str
