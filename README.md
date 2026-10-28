@@ -23,3 +23,19 @@ hands-on practice for the GCP Associate Cloud Engineer exam. All student data is
 - [x] **Phase 4A:** Cloud SQL Postgres 16 (Enterprise, db-f1-micro, connector enforcement, no authorized networks), IAM database user for the app's service account, migrations and seed through the Auth Proxy as the app, stopped between sessions ([notes](docs/phase-4a-cloud-sql.md))
 - [x] **Phase 4B:** Secret Manager secrets mounted as files by the GKE add-on (app reads them via pydantic-settings), Workload Identity (the KSA acts as the app's Google SA), least-privilege node service account, Cloud SQL Auth Proxy as a native sidecar; in-cluster Postgres and Kubernetes Secrets retired ([notes](docs/phase-4b-secrets-identity.md))
 - [x] **Phase 4C:** the app on GKE Autopilot against Cloud SQL: nodes on a least-privilege service account, Workload Identity verified from inside the pod, data survives pod replacement, a database outage takes the api out of rotation with zero restarts and it recovers on its own ([notes](docs/phase-4c-gke-cloud-sql.md))
+
+## Roadmap
+
+The original plan, and how the build actually went. Phases 3 and 4 built the GKE and Cloud SQL pieces by hand with gcloud first; the Terraform phase then turns them into code.
+
+| Phase | What | ACE exam domain | Status |
+|---|---|---|---|
+| 0 | Tools, GitHub repo, folder structure | (foundation) | Done |
+| 1 | GCP project, billing budget, IAM, gcloud, APIs | Setting up a cloud environment | Done |
+| 2 | The app on the laptop (FastAPI + Postgres in Docker) | (app skills) | Done |
+| 3 | Containers, Artifact Registry, GKE Autopilot, Kubernetes manifests, Ingress | Deploying and implementing | Done |
+| 4 | Cloud SQL, Secret Manager, Workload Identity, least-privilege node SA (by hand) | Deploying and implementing | Done |
+| 5 | Terraform: GCS state bucket, VPC, GKE Autopilot, Cloud SQL (private IP), service accounts, IAM | Planning and configuring | Next |
+| 6 | Pub/Sub → BigQuery pipeline, Looker Studio dashboard (optional: live teacher dashboard via Server-Sent Events) | Deploying data solutions | |
+| 7 | Cloud Build trigger: push to GitHub → auto-deploy | Ensuring successful operation | |
+| 8 | Monitoring, alerts, logging, least-privilege IAM review, final teardown | Access, security, operations | |
