@@ -304,8 +304,9 @@ Ctrl+C the proxy, then:
 gcloud sql instances patch exit-ticket-db --activation-policy=NEVER
 gcloud sql instances list
 ```
-`list` shows **`STOPPED`**. The API's `state` field stays **`RUNNABLE`** (it means "healthy", not "running"); the
-stop switch is `settings.activationPolicy`, and `list` combines the two. Check with `list`.
+`list` shows **`STOPPED`**. The stop switch is `settings.activationPolicy`; `describe` then reports `state: STOPPED`
+too (`--format="value(state,settings.activationPolicy)"` → `STOPPED NEVER`, checked in [Phase 4D](phase-4-cloud-sql.md)).
+An earlier version of this doc claimed `state` stays `RUNNABLE` while stopped; that was never tested and is wrong.
 
 To start at the beginning of the next session:
 ```bash
@@ -380,7 +381,7 @@ pgrep -fl cloud-sql-proxy
 | A role name with `@` rejected in SQL | Needs double quotes | `"exit-ticket-api@…iam"` |
 | psql shows `:` and waits | The pager (`less`) | `q`, or `-P pager=off` |
 | `gcloud logging read` prints nothing | Zero matches (not an error) | Start with the simplest filter and widen it |
-| `describe` says `RUNNABLE` after stopping | `state` ≠ running | `gcloud sql instances list` → `STOPPED` |
+| Not sure whether it's stopped | (none) | `gcloud sql instances list` → `STOPPED`, or `describe` → `state: STOPPED`, `activationPolicy: NEVER` |
 
 ---
 
