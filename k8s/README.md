@@ -35,7 +35,7 @@ scripts/create-k8s-secrets.sh
 2. Database, and wait until it accepts connections:
 ```bash
 kubectl apply -f k8s/db.yaml
-kubectl -n exit-ticket rollout status deployment/db --timeout=180s
+kubectl -n exit-ticket rollout status deployment/db --timeout=300s
 ```
 3. Migrations, and check they ran:
 ```bash
@@ -47,18 +47,27 @@ kubectl -n exit-ticket logs job/migrate
 ```bash
 sed "s/PROJECT_ID/$(gcloud config get project)/g" k8s/api.yaml | kubectl apply -f -
 sed "s/PROJECT_ID/$(gcloud config get project)/g" k8s/web.yaml | kubectl apply -f -
-kubectl -n exit-ticket rollout status deployment/api --timeout=180s
-kubectl -n exit-ticket rollout status deployment/web --timeout=180s
+kubectl -n exit-ticket rollout status deployment/api --timeout=300s
+kubectl -n exit-ticket rollout status deployment/web --timeout=300s
 ```
-5. Only when you want a public URL (bills hourly):
+5. Only when you want a public URL (bills hourly). Wait for an `ADDRESS`, then expect up to ~10 minutes of
+   `000`/502 before a 200:
 ```bash
 kubectl apply -f k8s/ingress.yaml
+kubectl -n exit-ticket get ingress web -w
 ```
 
 ## Teardown
 
-Ingress first, so GKE removes the load balancer, then the cluster:
+Ingress → namespace → cluster. The controllers that clean up the load balancer, the NEG and the health-check
+firewall rule run inside the cluster, so it must still exist while they finish:
 ```bash
 kubectl delete -f k8s/ingress.yaml --wait=true
+kubectl delete namespace exit-ticket
+```
+Wait 2–3 minutes, then:
+```bash
+gcloud compute network-endpoint-groups list
 gcloud container clusters delete exit-ticket --region=us-east4
 ```
+Full verification list: [docs/phase-3c-gke.md §11](../docs/phase-3c-gke.md#11-teardown).
