@@ -2,8 +2,8 @@
 
 Phase 4 replaces the temporary in-cluster Postgres with **Cloud SQL for PostgreSQL**, and the Kubernetes Secrets
 with **Secret Manager**, read by the pods through **Workload Identity Federation for GKE**. This document is the
-approved design. Nothing in it has been created yet; the build happens in later sessions, recorded in
-`docs/phase-4-cloud-sql.md`.
+approved design. The build happens in later sessions, each with its own doc: [Phase 4A](phase-4a-cloud-sql.md)
+(Cloud SQL) so far.
 
 | Part | What | PR |
 |---|---|---|
@@ -111,9 +111,10 @@ must be passed explicitly**.
 | Deletion protection | On | Delete needs an explicit `patch --no-deletion-protection` first |
 | Flags | `cloudsql.iam_authentication=on` | Required for IAM database auth |
 
-Planned create command:
+Create command, as run in [Phase 4A](phase-4a-cloud-sql.md) (`--region` and `--zone` are mutually exclusive; the
+GA command has no `--labels`, so labels are added with `gcloud beta sql instances patch --update-labels`):
 ```bash
-gcloud sql instances create exit-ticket-db --database-version=POSTGRES_16 --edition=enterprise --tier=db-f1-micro --region=us-east4 --zone=us-east4-a --availability-type=zonal --storage-type=SSD --storage-size=10 --no-storage-auto-increase --backup-start-time=07:00 --no-enable-point-in-time-recovery --database-flags=cloudsql.iam_authentication=on --connector-enforcement=REQUIRED --deletion-protection --labels=app=exit-ticket,env=dev
+gcloud sql instances create exit-ticket-db --database-version=POSTGRES_16 --edition=enterprise --tier=db-f1-micro --zone=us-east4-a --availability-type=zonal --storage-type=SSD --storage-size=10GB --no-storage-auto-increase --backup-start-time=07:00 --retained-backups-count=7 --no-enable-point-in-time-recovery --maintenance-window-day=SUN --maintenance-window-hour=8 --database-flags=cloudsql.iam_authentication=on --connector-enforcement=REQUIRED --deletion-protection
 ```
 The `postgres` password is set by prompt, never as a flag (flags land in shell history):
 ```bash
@@ -320,7 +321,7 @@ run and its output checked.
 4. Verify:
    ```bash
    gcloud container clusters list
-   gcloud sql instances list --format="table(name,state,settings.activationPolicy)"
+   gcloud sql instances list
    gcloud compute forwarding-rules list
    gcloud compute backend-services list
    gcloud compute network-endpoint-groups list
@@ -329,8 +330,9 @@ run and its output checked.
    gcloud compute instances list
    gcloud compute firewall-rules list --format="table(name,sourceRanges.list())"
    ```
-   Healthy: no clusters; `exit-ticket-db` `STOPPED` / `NEVER`; every compute list empty; only the four
-   `default-allow-*` firewall rules.
+   Healthy: no clusters; `exit-ticket-db` with `STATUS` `STOPPED`; every compute list empty; only the four
+   `default-allow-*` firewall rules. (Don't check the API's `state` field: it stays `RUNNABLE` while stopped;
+   `list` combines it with `activationPolicy`.)
 
 ### No session planned within 7 days
 
@@ -356,7 +358,8 @@ Check nothing was left running from last time: the verification list above, befo
 | **C. App and manifests** (local) | `secrets_dir` in `config.py` + tests; `serviceaccount.yaml`, `secretproviderclass.yaml`, proxy sidecar in `api.yaml` and `migrate-job.yaml`, `DATABASE_URL` in the ConfigMap; remove `db.yaml` and `scripts/create-k8s-secrets.sh`; kubeconform | No |
 | **D. Deploy** | Start Cloud SQL; create the cluster with the node SA and the add-on; apply; migrate; seed from the Mac; test; **full teardown (§11)** | Cluster, pods, instance |
 
-Each session ends with §11. Session D gets its own doc, `docs/phase-4-cloud-sql.md`.
+Each session ends with §11. **Phase 4A** ([notes](phase-4a-cloud-sql.md)) did session B plus the `exit-ticket-api`
+service account and its Cloud SQL roles from session A (the IAM database user needs the account to exist).
 
 ---
 
