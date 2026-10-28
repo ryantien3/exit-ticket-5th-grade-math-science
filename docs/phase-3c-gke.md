@@ -2,16 +2,18 @@
 
 Phase 3C runs the app on **GKE Autopilot** in `us-east4`: a temporary Postgres, the api and web images from
 Artifact Registry (by digest), a migration Job, and probes, Secrets and a ConfigMap, all tested end to end through
-`kubectl port-forward`. The cluster is created at the start of a session and **deleted at the end**, because it
-bills by the hour. The Ingress (public load balancer) is written but not yet applied.
+`kubectl port-forward`, then over public HTTP through a GKE Ingress (an external Application Load Balancer). The
+cluster is created at the start of a session and **deleted at the end**, because it and the load balancer bill by
+the hour.
 
 | Part | What was built | PR |
 |---|---|---|
-| **3C** | `k8s/` manifests (namespace, configmap, db, api, web, migrate Job, ingress), `scripts/create-k8s-secrets.sh`, first deploy, readiness drill, Cloud Logging check, teardown | (this PR) |
+| **3C** | `k8s/` manifests (namespace, configmap, db, api, web, migrate Job, ingress), `scripts/create-k8s-secrets.sh`, first deploy, readiness drill, Cloud Logging check, teardown | #11 |
+| **3C Ingress** | Ingress applied and tested over HTTP, load balancer resources inspected, teardown order revised (Ingress → namespace → cluster), budget alert tightened | (this PR) |
 
 > **About the commands in this doc.** Each code block contains commands only, no `#` comments: in zsh, `#` is not a
 > comment unless `setopt interactivecomments` is on. **Run kubectl commands from the repo root**: the manifests are
-> referenced by relative path (see [Lessons learned](#13-lessons-learned)).
+> referenced by relative path (see [Lessons learned](#14-lessons-learned)).
 
 > **Placeholders used below.**
 >
@@ -31,13 +33,14 @@ bills by the hour. The Ingress (public load balancer) is written but not yet app
 6. [Deploying and testing](#6-deploying-and-testing)
 7. [The readiness drill](#7-the-readiness-drill)
 8. [Logs in Cloud Logging](#8-logs-in-cloud-logging)
-9. [Troubleshooting](#9-troubleshooting)
-10. [Teardown](#10-teardown)
-11. [Recreate from scratch](#11-recreate-from-scratch)
-12. [Known gaps](#12-known-gaps)
-13. [Lessons learned](#13-lessons-learned)
-14. [Interview talking points](#14-interview-talking-points)
-15. [ACE exam notes](#ace-exam-notes)
+9. [Public HTTP through the Ingress](#9-public-http-through-the-ingress)
+10. [Troubleshooting](#10-troubleshooting)
+11. [Teardown](#11-teardown)
+12. [Recreate from scratch](#12-recreate-from-scratch)
+13. [Known gaps](#13-known-gaps)
+14. [Lessons learned](#14-lessons-learned)
+15. [Interview talking points](#15-interview-talking-points)
+16. [ACE exam notes](#ace-exam-notes)
 
 ---
 
@@ -105,7 +108,7 @@ gcloud projects get-iam-policy PROJECT_ID --flatten="bindings[].members" --filte
 gcloud compute networks list
 ```
 It has `roles/editor` (automatic in a project with no organization), which includes reading Artifact Registry, so
-nothing was granted. See [Known gaps](#12-known-gaps).
+nothing was granted. See [Known gaps](#13-known-gaps).
 
 **💰 Billing starts with this command** (cluster fee; pods bill once scheduled):
 ```bash
@@ -168,7 +171,7 @@ only captures stdout, so `sed` gets just the project ID.
 | `api.yaml` | Image by digest; env from ConfigMap and `secretKeyRef`; 100m / 256Mi; startup, liveness and readiness probes; UID 10001; read-only root + `emptyDir` `/tmp` |
 | `web.yaml` | Image by digest; `containerPort: 8080`; Service port 80 → 8080; probes on `/`; UID 101; read-only root + `emptyDir` for `/tmp` and `/etc/nginx/conf.d` |
 | `migrate-job.yaml` | `alembic upgrade head`; `backoffLimit: 3`, `activeDeadlineSeconds: 300`, `ttlSecondsAfterFinished: 3600`, `restartPolicy: Never` |
-| `ingress.yaml` | One default backend → `web:80` (written, not applied yet) |
+| `ingress.yaml` | One default backend → `web:80`; no class, so GKE's default (external) controller takes it ([§9](#9-public-http-through-the-ingress)) |
 
 ### Resource requests (what's billed)
 
@@ -352,7 +355,139 @@ Logs stay after the cluster is deleted (30 days in the `_Default` bucket).
 
 ---
 
-## 9. Troubleshooting
+## 9. Public HTTP through the Ingress
+
+**💰 The load balancer bills hourly from the apply until the delete** (mainly the forwarding rule, plus data
+processed). Apply it only after the app is running, test, and delete it before the cluster ([§11](#11-teardown)).
+
+### What a GKE Ingress creates
+
+The Ingress is one object in the cluster, but GKE's Ingress controller turns it into Compute Engine resources
+outside the cluster:
+
+```
+Browser
+  → forwarding rule      k8s2-fr-…   global external IP, port 80   (this is what bills)
+  → target HTTP proxy    k8s2-tp-…   ends the HTTP connection at Google's edge
+  → URL map              k8s2-um-…   routing rules: everything → the web backend
+  → backend service      k8s1-…      global; balancing settings; health check attached
+  → NEG                  k8s1-…      zonal (us-east4-c); endpoints are pod IP:port (GCE_VM_IP_PORT)
+  → web pod              10.40.0.19:8080
+
+  health check   k8s1-…        GET / on the serving port, every 5 s
+  firewall rule  k8s-fw-l7--…  allows 35.191.0.0/16 and 130.211.0.0/22 (Google's health checkers)
+```
+
+- **`k8s2-` names are the frontend** (one set per Ingress); **`k8s1-` names are the backend** (one per Service
+  port; the backend service, health check and NEG share it).
+- In each `gcloud compute … list`, the last column names the next link (`TARGET`, `URL_MAP`, `DEFAULT_SERVICE`,
+  `BACKENDS`): that's how to trace a broken load balancer.
+- The events in `describe ingress` show the chain built from the inside out: URL map, target proxy, forwarding
+  rule, then `IP is now …`.
+
+### Container-native load balancing (NEGs)
+
+| | Instance groups (older) | NEGs (container-native) |
+|---|---|---|
+| The load balancer sends to | A **node** on its NodePort; kube-proxy forwards to a pod, maybe on another node | The **pod IP** directly |
+| Hops | Two, often across zones | One |
+| Health check tests | The node | Each pod |
+| Service type | NodePort | ClusterIP is fine |
+| Requires | (none) | A VPC-native cluster (Autopilot always is) |
+
+GKE added `cloud.google.com/neg: '{"ingress": true}'` to the web Service **by itself**:
+`kubectl -n exit-ticket get svc web -o jsonpath='{.metadata.annotations}'` showed it, while
+`last-applied-configuration` (exactly what our file sent) had `"annotations":{}`. That's why a ClusterIP Service
+works as the backend without changing `web.yaml`.
+
+### The health check comes from the readiness probe
+
+| Health check | Copied from the web readiness probe | Observed |
+|---|---|---|
+| Path | `httpGet.path` | `/` (nginx returns `index.html`, 200) |
+| Port | The probe's port, which must be the Service's `targetPort` | Blank = "use serving port": 8080 per endpoint |
+| Interval | `periodSeconds` | 5 s |
+| Timeout | `timeoutSeconds` (default 1) | 1 s |
+
+- GKE reads the probe **once, when it creates the health check**. Changing the probe later doesn't change the
+  health check (recreate the Ingress, or set it explicitly in a `BackendConfig`).
+- The web pods must exist when the Ingress is applied, or GKE uses its default check.
+- The expected response is a 200; a redirect or 404 marks the backend unhealthy.
+
+### Applying and waiting
+
+From the repo root, with the app running ([§6](#6-deploying-and-testing)). The Ingress has no `PROJECT_ID`, so no
+`sed`:
+```bash
+kubectl apply -f k8s/ingress.yaml
+kubectl -n exit-ticket get ingress web -w
+```
+`CLASS <none>` is expected: no class means GKE's default external controller. `ADDRESS` filled in after about
+1–2 minutes (Ctrl+C the watch).
+```bash
+kubectl -n exit-ticket describe ingress web
+```
+The annotation `ingress.kubernetes.io/backends` read `{"k8s1-…":"Unknown"}` at first: the health checkers hadn't
+reported yet. Then:
+```bash
+IP=$(kubectl -n exit-ticket get ingress web -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+echo $IP
+for i in {1..40}; do curl -s -o /dev/null -w "%{http_code} " "http://$IP/"; sleep 15; done; echo
+```
+Result: `000 000 200 200 200 200`. `000` = no connection yet (Google's edge not programmed). There was no 502
+phase this time; there often is, for several minutes.
+
+**502s right after the IP appears are normal.** The configuration has to reach Google Front Ends worldwide, the
+firewall rule has to exist, and the health check has to pass. Telling provisioning from broken:
+
+| Check | Still provisioning | Broken |
+|---|---|---|
+| `ingress.kubernetes.io/backends` | `Unknown` → `HEALTHY` | `UNHEALTHY` for more than ~5 min |
+| `gcloud compute backend-services get-health … --global` | Endpoint missing or briefly `UNHEALTHY` | `UNHEALTHY` while the pod is `1/1 Ready` |
+| Time since the IP appeared | Under ~10 min | Still 502 ~10 min after `HEALTHY` |
+
+A 502 page from Google (`Error: Server Error`) means the load balancer couldn't use a backend; a 502 with
+`Server: nginx` means it reached nginx, and the **api** is the problem.
+
+### Proof it went through the load balancer
+
+```bash
+curl -sI "http://$IP/"
+curl -s "http://$IP/api/healthz"
+curl -s "http://$IP/api/readyz"
+```
+`HTTP/1.1 200 OK` with **`Server: nginx`** (the web pod) and **`Via: 1.1 google`** (the Google Front End), then
+`{"status":"ok"}` and `{"status":"ready"}`: browser → load balancer → nginx → api → Postgres.
+
+The resources, read-only:
+```bash
+gcloud compute forwarding-rules list
+gcloud compute target-http-proxies list
+gcloud compute url-maps list
+gcloud compute backend-services list
+gcloud compute health-checks list --format="table(name,type,httpHealthCheck.port,httpHealthCheck.requestPath,checkIntervalSec,timeoutSec)"
+gcloud compute network-endpoint-groups list
+gcloud compute firewall-rules list --format="table(name,sourceRanges.list())"
+gcloud compute backend-services get-health BACKEND_SERVICE --global
+```
+`get-health` showed `healthState: HEALTHY`, `ipAddress: 10.40.0.19`, `port: 8080` (the pod), and an `instance`
+field naming the node the pod runs on. **`--global`**: the backend service of this load balancer is global.
+
+| Firewall rule | Created by | Removed when |
+|---|---|---|
+| `default-allow-*` | The `default` network | Never |
+| `gke-exit-ticket-…-all`, `-vms` | Cluster creation (pod and node traffic) | The cluster is deleted |
+| `k8s-fw-l7--…` (health checker ranges) | The Ingress controller, shared by all Ingresses in the cluster | A cleanup pass after the last Ingress is gone |
+
+**Not tested this time:** a student submission in the browser through the load balancer. The same flow passed
+through the port-forward ([§6](#6-deploying-and-testing)); the only new hop, the load balancer in front of nginx,
+was proven with curl. **Plain HTTP:** the teacher passcode and session token cross the internet unencrypted;
+acceptable only for synthetic data and a public IP that lives for minutes. The IP is ephemeral: a new one each
+time.
+
+---
+
+## 10. Troubleshooting
 
 | `STATUS` / symptom | Meaning | First command | Usual causes |
 |---|---|---|---|
@@ -364,23 +499,41 @@ Logs stay after the cluster is deleted (30 days in the `_Default` bucket).
 | `RESTARTS` climbing | Liveness keeps failing | `describe pod` | Wrong probe path/port; probe too strict; no startup probe for a slow start |
 | Job never completes | Retries exhausted or deadline hit | `kubectl -n exit-ticket get pods -l app=migrate`, then `logs` | Database not ready; wrong `DATABASE_URL` |
 | `sed: k8s/...: No such file or directory` | Wrong working directory | `pwd` | Run from the repo root |
+| `No resources found in exit-ticket namespace.` | Nothing applied (kubectl says this even if the namespace doesn't exist) | `kubectl get namespaces`, `kubectl config current-context` | Commands never ran; wrong context |
+| Prompt shows `bquote>` | zsh is waiting for a closing backtick; **nothing has run** | Ctrl+C | A stray `` ` `` or a ```` ``` ```` fence line was pasted |
+| Ingress `ADDRESS` stays empty | The controller hasn't created the forwarding rule | `kubectl -n exit-ticket describe ingress web` → Events | Backend Service missing or not NEG-enabled; give it 2–3 min |
+| 502 after the IP appears | Provisioning, or backends unhealthy | `ingress.kubernetes.io/backends` annotation | Normal for up to ~10 min; `UNHEALTHY` beyond that: probe path/port, firewall, pod not ready |
 
 `logs --previous` shows the **last crashed** container; plain `logs` shows the current attempt.
 
 ---
 
-## 10. Teardown
+## 11. Teardown
 
-**Order matters once an Ingress exists:** delete the Ingress first, so GKE's controller removes the load balancer
-resources it created outside the cluster (forwarding rule, target proxy, URL map, backend service, health check,
-NEGs). Deleting the cluster first can orphan them, still billing. The same goes for PVCs and their disks.
+**Order: Ingress → namespace → cluster.** Each resource outside the cluster is cleaned up by a controller running
+*inside* it, so the cluster must still exist while they finish:
+
+| Delete | Removes | Observed |
+|---|---|---|
+| 1. The Ingress | Forwarding rule, target proxy, URL map, backend service, health check. **Load balancer billing stops** | `--wait=true` blocks until the finalizer is done (about a minute) |
+| 2. The namespace | Pods (billing stops) and the web Service, so the NEG controller deletes the NEG | Right after step 1 the NEG and the shared `k8s-fw-l7--…` rule were still listed; a few minutes after this step both were gone |
+| 3. The cluster | Nodes, the `gke-exit-ticket-…` firewall rules, the cluster fee | (none) |
+
+Deleting the cluster first can orphan the load balancer resources, and the forwarding rule keeps billing. The same
+goes for PVCs and their disks.
 
 Stop every `port-forward` and `-w` watch (Ctrl+C), then:
 ```bash
 kubectl delete -f k8s/ingress.yaml --wait=true
+gcloud compute forwarding-rules list
+kubectl delete namespace exit-ticket
 ```
-(only if it was applied)
+(skip the first two lines if the Ingress wasn't applied)
+
+Wait 2–3 minutes, then:
 ```bash
+gcloud compute network-endpoint-groups list
+gcloud compute firewall-rules list --format="table(name,sourceRanges.list())"
 gcloud container clusters delete exit-ticket --region=us-east4
 ```
 
@@ -388,11 +541,18 @@ Check that nothing is left:
 ```bash
 gcloud container clusters list
 gcloud compute forwarding-rules list
+gcloud compute target-http-proxies list
+gcloud compute url-maps list
 gcloud compute backend-services list
+gcloud compute health-checks list
 gcloud compute network-endpoint-groups list
 gcloud compute disks list
+gcloud compute addresses list
+gcloud compute instances list
+gcloud compute firewall-rules list --format="table(name,sourceRanges.list())"
 ```
-All should be empty (`Listed 0 items.`).
+All lists empty (`Listed 0 items.`; `clusters list` may print nothing at all), and only the four
+`default-allow-*` firewall rules left.
 
 Optionally remove the stale kubectl context:
 ```bash
@@ -401,9 +561,28 @@ kubectl config delete-context gke_PROJECT_ID_us-east4_exit-ticket
 
 **What stays:** the Artifact Registry images (storage only), logs (30 days), the `default` network.
 
+### The safety net: a budget alert
+
+A budget belongs to the **billing account**, not the project, and it **only notifies**: spending continues past
+100%. (Stopping spend automatically needs the budget's Pub/Sub notifications and a Cloud Function that disables
+billing.)
+```bash
+gcloud billing accounts list
+gcloud billing budgets list --billing-account=BILLING_ACCOUNT_ID
+```
+(the first run may ask to enable `billingbudgets.googleapis.com`: `gcloud services enable billingbudgets.googleapis.com`)
+
+The budget existed ($25/month, the whole billing account, 50/90/100% of actual spend, default email recipients),
+but with `creditTypesTreatment: INCLUDE_ALL_CREDITS`: credits (the free trial, the GKE free tier) are subtracted
+first, so net cost can stay at $0 while real usage grows and **no alert fires**. Updated:
+```bash
+gcloud billing budgets update BUDGET_ID --billing-account=BILLING_ACCOUNT_ID --credit-types-treatment=exclude-all-credits --add-threshold-rule=percent=1.0,basis=forecasted-spend
+```
+Now `EXCLUDE_ALL_CREDITS`, plus a **forecasted** 100% rule that warns before the money is spent.
+
 ---
 
-## 11. Recreate from scratch
+## 12. Recreate from scratch
 
 About 15 minutes, mostly waiting. From the repo root:
 
@@ -427,9 +606,15 @@ kubectl -n exit-ticket rollout status deployment/web --timeout=300s
 Then seed through the db port-forward ([§6](#seeding-through-a-port-forward)), and open the app through
 `kubectl -n exit-ticket port-forward svc/web 8080:80`. Student login codes are new each time.
 
+For a public URL (💰 bills hourly), apply the Ingress and wait for a 200 ([§9](#applying-and-waiting)):
+```bash
+kubectl apply -f k8s/ingress.yaml
+kubectl -n exit-ticket get ingress web -w
+```
+
 ---
 
-## 12. Known gaps
+## 13. Known gaps
 
 | Gap | Why it's acceptable now | Planned fix |
 |---|---|---|
@@ -438,12 +623,13 @@ Then seed through the db port-forward ([§6](#seeding-through-a-port-forward)), 
 | Secrets as Kubernetes Secrets | RBAC-protected, short-lived cluster | **Secret Manager + Workload Identity** (Phase 4) |
 | One replica each | Smallest bill | 2+ replicas and a PodDisruptionBudget once there's real traffic |
 | nginx stops on SIGTERM (fast), not SIGQUIT (graceful) | One replica, no real traffic | A `preStop` hook running `nginx -s quit` |
-| Ingress written but not applied; no HTTPS | Load balancer bills hourly | Apply when needed; HTTPS (managed certificate), IAP, Cloud Armor later |
+| Ingress on plain HTTP with an ephemeral IP | Synthetic data; applied only for a test | Reserved global static IP (`kubernetes.io/ingress.global-static-ip-name`), Google-managed certificate, HTTP → HTTPS redirect (`FrontendConfig`), IAP / Cloud Armor (`BackendConfig`) |
+| Health check inferred from the readiness probe | Matches what we want (`GET /` on 8080) | An explicit `BackendConfig` health check, so a probe change can't silently diverge |
 | Created by hand with gcloud | Learning the commands first | Terraform with remote state in GCS |
 
 ---
 
-## 13. Lessons learned
+## 14. Lessons learned
 
 | What happened | Cause | Lesson |
 |---|---|---|
@@ -455,10 +641,14 @@ Then seed through the db port-forward ([§6](#seeding-through-a-port-forward)), 
 | EndpointSlice table still showed the not-ready pod | Not-ready endpoints stay in the slice with `ready=false` | Look at `.conditions.ready` |
 | Predicted readiness errors, got `Exception in ASGI application` | The dashboard kept refreshing against the empty database | Check what the logs actually say |
 | `Your active configuration is: [exit-ticket]` mixed into apply output | gcloud's note on stderr | Harmless; `$(...)` captures stdout only |
+| `bquote>` prompt, then `No resources found in exit-ticket namespace.` | A stray backtick in a paste left zsh waiting; none of the deploy ran | Paste commands only, a few lines at a time; check `get namespaces` before debugging pods |
+| The web Service had a NEG annotation we never wrote | GKE adds it on VPC-native clusters (`last-applied-configuration` proved it) | Compare live state with `last-applied-configuration` to see what the platform added |
+| NEG and `k8s-fw-l7` rule still listed after deleting the Ingress | The NEG belongs to the Service; the firewall rule is shared per cluster and removed in a later pass | Teardown order Ingress → namespace → cluster, then verify |
+| Budget had `INCLUDE_ALL_CREDITS` | The default when created | Exclude credits so the alert tracks real usage; add a forecasted threshold |
 
 ---
 
-## 14. Interview talking points
+## 15. Interview talking points
 
 **1. "Same images, every environment."** The digests pushed in Phase 3B run unchanged on GKE; only environment
 variables differ. Config in a ConfigMap, secrets in Secrets created by a script, and the project ID filled in at
@@ -479,6 +669,12 @@ caught two failures (Postgres' socket-only init server, nginx needing a writable
 **5. "Cost discipline."** Autopilot bills by requests, so I sized them at about 0.25 vCPU and 576 MiB total,
 verified Autopilot didn't adjust them, and the cluster lives only for a session: create, test, delete, verify
 nothing is left (forwarding rules, NEGs, disks).
+
+**6. "I can trace a load balancer end to end."** One Ingress became a forwarding rule, target proxy, URL map,
+backend service, health check, a NEG of pod IPs and a firewall rule for Google's health checkers. I followed the
+chain by name with gcloud, confirmed the health check was copied from the readiness probe, proved the path with
+`Via: 1.1 google`, and tore it down inside-out so nothing was orphaned. I also found the budget alert was counting
+credits and would have stayed silent, and fixed it.
 
 ---
 
@@ -512,6 +708,20 @@ nothing is left (forwarding rules, NEGs, disks).
 
 - Pods find Services by DNS: `SERVICE.NAMESPACE.svc.cluster.local`.
 
+**Ingress and load balancing**
+- GKE Ingress (class `gce`, the default) → **global external Application Load Balancer**: forwarding rule → target
+  HTTP(S) proxy → URL map → backend service (+ health check) → NEGs or instance groups. `gce-internal` → internal
+  Application Load Balancer.
+- **Container-native load balancing = NEGs**: traffic and health checks go straight to pod IPs; needs a VPC-native
+  cluster; ClusterIP Services work. Instance groups need NodePort and add a hop.
+- Google's health checks come from **35.191.0.0/16 and 130.211.0.0/22**; the firewall must allow them (GKE creates
+  the rule for Ingress; for VMs you create it).
+- Extras by CRD: **BackendConfig** (health check, timeouts, IAP, Cloud Armor, CDN), **FrontendConfig** (HTTPS
+  redirect, SSL policy), **ManagedCertificate** (Google-managed TLS). Static IP:
+  `gcloud compute addresses create NAME --global` + `kubernetes.io/ingress.global-static-ip-name`.
+- The **Gateway API** is the successor to Ingress.
+- `gcloud compute backend-services get-health NAME --global` shows each backend's health.
+
 **Probes**
 - Liveness failure → restart; readiness failure → removed from Service endpoints; startup → delays the others.
 - GKE Ingress builds its load balancer **health check from the readiness probe**.
@@ -532,3 +742,6 @@ nothing is left (forwarding rules, NEGs, disks).
 **Cost hygiene**
 - Delete Ingresses (load balancers) and PVCs (disks) **before** the cluster; then check forwarding rules, backend
   services, NEGs and disks.
+- **Budgets** are set on the billing account, can be scoped to projects, alert at thresholds of actual or
+  forecasted spend, and **don't cap spending** (use Pub/Sub + a Cloud Function for that). Choose whether credits
+  count. Roles: Billing Account Administrator / User / Viewer, Project Billing Manager.
