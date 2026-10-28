@@ -49,7 +49,7 @@ approved design. The build happens in later sessions, each with its own doc: [Ph
 | **Database auth** | **IAM database authentication** for the app (no app password); the built-in `postgres` user keeps a password for admin use only |
 | **Secrets** | `session-secret`, `teacher-passcode` (and `postgres-admin-password`, for you only) in Secret Manager, **pinned versions**, mounted as files by the **GKE Secret Manager add-on**; the app reads them through pydantic-settings `secrets_dir` |
 | **`DATABASE_URL`** | No password any more, so it moves to the ConfigMap |
-| **Pod identity** | Kubernetes SA `api` (api and migrate): the proxy **impersonates** Google SA `exit-ticket-api` (Cloud SQL); the Secret Manager add-on uses the **KSA principal directly** (secrets) |
+| **Pod identity** | Kubernetes SA `api` (api and migrate), annotated so it acts as Google SA `exit-ticket-api` for both the proxy (Cloud SQL) and the Secret Manager add-on (secrets) |
 | **Node identity** | Dedicated Google SA `exit-ticket-nodes`, set at cluster creation (closes the Phase 3 Editor gap) |
 | **Cluster** | Recreated with `--service-account` and `--enable-secret-manager`; `k8s/db.yaml` retired |
 | **Local dev** | Compose Postgres daily; the Auth Proxy binary on the Mac only to test against Cloud SQL and to seed |
@@ -227,7 +227,7 @@ the full settings. Splitting them is a known gap ([§13](#13-known-gaps-and-thin
 | `serviceAccount:PROJECT_ID.svc.id.goog[exit-ticket/api]` | `roles/iam.workloadIdentityUser` | The GSA `exit-ticket-api` | The KSA may act as the GSA |
 | GSA `exit-ticket-api` | `roles/cloudsql.client` | Project (Cloud SQL has no per-instance IAM) | The proxy may connect |
 | GSA `exit-ticket-api` | `roles/cloudsql.instanceUser` | Project | IAM database login |
-| KSA principal `principal://…/subject/ns/exit-ticket/sa/api` | `roles/secretmanager.secretAccessor` | **Each secret**: `session-secret`, `teacher-passcode` | The add-on authenticates as the KSA itself ([Phase 4B](phase-4b-secrets-identity.md)); the GSA gets no secret access |
+| GSA `exit-ticket-api` | `roles/secretmanager.secretAccessor` | **Each secret**: `session-secret`, `teacher-passcode` | The add-on acts as the annotated GSA (proven in [Phase 4C](phase-4c-gke-cloud-sql.md); a grant to the KSA principal alone was denied) |
 | You | `roles/iam.serviceAccountTokenCreator` | The GSA `exit-ticket-api` | Seed from the Mac as the app ([§8](#8-local-development)) |
 | GSA `exit-ticket-nodes` | `roles/container.defaultNodeServiceAccount` | Project | Node logging, monitoring, metadata |
 | GSA `exit-ticket-nodes` | `roles/artifactregistry.reader` | **The `exit-ticket` repository** | Pull images |
@@ -375,12 +375,12 @@ service account and its Cloud SQL roles from session A (the IAM database user ne
 | PITR off | Re-seedable data | On for anything real |
 
 To confirm during the build:
-- ~~The Secret Manager add-on with a KSA that impersonates a GSA.~~ Decided in Phase 4B from the add-on's docs:
-  `secretAccessor` goes to the KSA principal directly. Confirm the mount works on the first deploy.
-- `automountServiceAccountToken: false` still works with Workload Identity (the GKE metadata server fetches the
-  token itself).
-- Exact `gcloud sql instances create` flags against `--help` on the day.
-- Autopilot's resource adjustments for the proxy sidecar (`autopilot.gke.io/resource-adjustment`).
+- ~~The Secret Manager add-on with a KSA that impersonates a GSA.~~ **Resolved in Phase 4C:** with the KSA
+  annotated, the add-on acts as the GSA. Phase 4B's grant to the KSA principal gave `PermissionDenied`; granting
+  the GSA fixed it, and the KSA grant was removed.
+- ~~`automountServiceAccountToken: false` with Workload Identity.~~ Works (Phase 4C).
+- ~~Exact `gcloud sql instances create` flags against `--help` on the day.~~ Done in Phase 4A.
+- ~~Autopilot's resource adjustments for the proxy sidecar.~~ None (`<none>`, Phase 4C).
 
 ---
 

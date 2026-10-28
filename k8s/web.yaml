@@ -26,8 +26,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: web
-          # By digest: the image pushed in Phase 3B (tag ac93f06).
-          image: us-east4-docker.pkg.dev/PROJECT_ID/exit-ticket/web@sha256:e0db2a9b347f5c4064d753de9cb21c76cad647d9368fc4d665be5312e467da12
+          # By digest: the image pushed in Phase 4C (tag 5fefc95).
+          image: us-east4-docker.pkg.dev/PROJECT_ID/exit-ticket/web@sha256:eab714b74b6e8678e6b76c1d5d07fbeff821aa78c939e19f20b918de2aa8e89d
           ports:
             # nginx.conf says "listen 8080" (unprivileged image), so the container port is 8080.
             - name: http
