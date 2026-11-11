@@ -25,6 +25,7 @@ hands-on practice for the GCP Associate Cloud Engineer exam. All student data is
 - [x] **Phase 4C:** the app on GKE Autopilot against Cloud SQL: nodes on a least-privilege service account, Workload Identity verified from inside the pod, data survives pod replacement, a database outage takes the api out of rotation with zero restarts and it recovers on its own ([notes](docs/phase-4c-gke-cloud-sql.md))
 - [x] **Phase 5A:** Terraform bootstrap: layered layout (bootstrap, foundation, data, cluster), versioned and locked GCS state bucket with uniform access, public access prevention and three delete locks, its own state migrated into it; Terraform and the Google provider pinned, lock file for Mac and CI ([notes](docs/phase-5a-bootstrap.md), [pre-check](docs/phase-5-precheck.md))
 - [x] **Phase 5B:** Terraform foundation, part 1: 30 hand-built resources (APIs, service accounts, additive IAM, secret containers, Artifact Registry with its cleanup policy) imported with zero recreation; delete protections; Editor removed from the Compute Engine default SA after a dependency check; secret values kept out of state ([notes](docs/phase-5b-foundation.md))
+- [x] **Phase 5C:** Terraform foundation, part 2: custom-mode VPC, a us-east4 subnet with Pod and Service secondary ranges (VPC-native, sized for Autopilot) and Private Google Access, private services access (reserved range + peering to Google's service producer network) for Cloud SQL private IP, no allow rules of our own; protected against wrong-order destroys ([notes](docs/phase-5c-network.md))
 
 ## Roadmap
 
@@ -37,7 +38,7 @@ The original plan, and how the build actually went. Phases 3 and 4 built the GKE
 | 2 | The app on the laptop (FastAPI + Postgres in Docker) | (app skills) | Done |
 | 3 | Containers, Artifact Registry, GKE Autopilot, Kubernetes manifests, Ingress | Deploying and implementing | Done |
 | 4 | Cloud SQL, Secret Manager, Workload Identity, least-privilege node SA (by hand) | Deploying and implementing | Done |
-| 5 | Terraform: GCS state bucket, VPC, GKE Autopilot, Cloud SQL (private IP), service accounts, IAM | Planning and configuring | In progress: 5A, 5B done ([pre-check](docs/phase-5-precheck.md)) |
+| 5 | Terraform: GCS state bucket, VPC, GKE Autopilot, Cloud SQL (private IP), service accounts, IAM | Planning and configuring | In progress: 5A–5C done ([pre-check](docs/phase-5-precheck.md)) |
 | 6 | Pub/Sub → BigQuery pipeline, Looker Studio dashboard (optional: live teacher dashboard via Server-Sent Events) | Deploying data solutions | |
 | 7 | Cloud Build trigger: push to GitHub → auto-deploy | Ensuring successful operation | |
 | 8 | Monitoring, alerts, logging, least-privilege IAM review, final teardown | Access, security, operations | |

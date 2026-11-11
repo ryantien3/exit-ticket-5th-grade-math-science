@@ -6,8 +6,8 @@ destroy in reverse.
 | Layer | What | State prefix | Lifetime | Status |
 |---|---|---|---|---|
 | [`bootstrap/`](bootstrap/) | The state bucket | `bootstrap` | Forever | Done ([5A](../../docs/phase-5a-bootstrap.md)) |
-| [`foundation/`](foundation/) | APIs, service accounts, IAM, secret containers, Artifact Registry ([5B](../../docs/phase-5b-foundation.md)); VPC, private services access (5C) | `foundation` | Months | Part 1 done |
-| `data/` | Cloud SQL (stop/start with `activation_policy`) | `data` | Months, stopped between sessions | |
+| [`foundation/`](foundation/) | APIs, service accounts, IAM, secret containers, Artifact Registry ([5B](../../docs/phase-5b-foundation.md)); VPC, subnet, private services access ([5C](../../docs/phase-5c-network.md)) | `foundation` | Months | Done |
+| `data/` | Cloud SQL (stop/start with `activation_policy`) | `data` | Months, stopped between sessions | Next |
 | `cluster/` | GKE Autopilot | `cluster` | Created and destroyed every session | |
 
 In any layer, on a new clone:
