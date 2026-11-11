@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# Create the app's secrets in Secret Manager, without any value appearing in a command line,
-# your shell history, a file, or the repo. Values go to gcloud through a pipe (--data-file=-).
+# Add the first version (the value) of the app's secrets, without any value appearing in a
+# command line, your shell history, a file, or the repo. Values go to gcloud through a pipe
+# (--data-file=-).
+#
+# The secrets themselves (name, us-east4 replication, labels, IAM) are created by Terraform
+# (infra/terraform/foundation). Terraform never holds the values: they would land in its
+# state in plain text.
 #
 #   session-secret:   newly generated (signs login tokens)
 #   teacher-passcode: TEACHER_PASSCODE from app/api/.env, so you sign in with the passcode
@@ -9,18 +14,20 @@
 # Usage (from anywhere in the repo, with the exit-ticket gcloud configuration active):
 #   scripts/create-app-secrets.sh
 #
-# It refuses to touch existing secrets. To rotate one, add a new version instead, e.g.
+# It refuses to touch a secret that already has a version. To rotate one, add a version, e.g.
 #   openssl rand -base64 48 | tr -d '\n' | gcloud secrets versions add session-secret --data-file=-
 # then bump the version number in k8s/secretproviderclass.yaml.
 set -euo pipefail
 
-# Same region as everything else; the replication policy can't be changed later.
-LOCATION="us-east4"
 cd "$(git rev-parse --show-toplevel)"
 
 for name in session-secret teacher-passcode; do
-    if gcloud secrets describe "$name" >/dev/null 2>&1; then
-        echo "Secret $name already exists; not overwriting it." >&2
+    if ! gcloud secrets describe "$name" >/dev/null 2>&1; then
+        echo "Secret $name doesn't exist. Create it with Terraform first (infra/terraform/foundation)." >&2
+        exit 1
+    fi
+    if [ -n "$(gcloud secrets versions list "$name" --limit=1 --format='value(name)')" ]; then
+        echo "Secret $name already has a version; not adding another." >&2
         echo "To rotate it, add a version (see the comment at the top of this script)." >&2
         exit 1
     fi
@@ -32,13 +39,12 @@ if [ "${#TEACHER_PASSCODE}" -lt 8 ] || [ "${TEACHER_PASSCODE#replace-me}" != "$T
     exit 1
 fi
 
-create() {
-    gcloud secrets create "$1" --replication-policy=user-managed --locations="$LOCATION" \
-        --labels=app=exit-ticket --data-file=-
+add_version() {
+    gcloud secrets versions add "$1" --data-file=-
 }
 
 # printf is a shell builtin, so the passcode isn't passed to another program's command line.
-openssl rand -base64 48 | tr -d '\n' | create session-secret
-printf '%s' "$TEACHER_PASSCODE" | create teacher-passcode
+openssl rand -base64 48 | tr -d '\n' | add_version session-secret
+printf '%s' "$TEACHER_PASSCODE" | add_version teacher-passcode
 
-echo "Created session-secret and teacher-passcode (version 1 each; values not shown)."
+echo "Added version 1 of session-secret and teacher-passcode (values not shown)."
