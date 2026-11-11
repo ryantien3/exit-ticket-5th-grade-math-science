@@ -120,6 +120,9 @@ docs.
 
 ### 3.1 Identities (free) — [4A §2](phase-4a-cloud-sql.md#2-the-apps-google-service-account), [4B §4](phase-4b-secrets-identity.md#4-iam-bindings)
 
+> **Since Phase 5B these are managed by Terraform** (`infra/terraform/foundation`, [5B](phase-5b-foundation.md)). The
+> commands below are the by-hand history; to rebuild, `terraform apply` the foundation layer instead.
+
 ```bash
 gcloud services list --enabled --format="value(config.name)" | grep -E "sqladmin|secretmanager|iamcredentials|container|compute"
 gcloud iam service-accounts create exit-ticket-api --display-name="Exit Ticket API (pods)" --description="Pod identity for the api and migrate Job: Cloud SQL IAM login"
@@ -135,6 +138,9 @@ The `workloadIdentityUser` binding needs the project's workload identity pool, w
 been created in the project.
 
 ### 3.2 Secrets (free) — [4A §4](phase-4a-cloud-sql.md#4-the-postgres-password), [4B §2](phase-4b-secrets-identity.md#2-creating-the-secrets)
+
+> **Since Phase 5B the secret containers and their IAM come from Terraform**; only the values are added by hand, with
+> `gcloud secrets versions add` and `scripts/create-app-secrets.sh` ([5B §6](phase-5b-foundation.md#6-secret-values-stay-out-of-terraform)).
 
 ```bash
 openssl rand -base64 32 | tr -d '\n' | gcloud secrets create postgres-admin-password --replication-policy=user-managed --locations=us-east4 --data-file=-
@@ -337,11 +343,11 @@ kubectl config delete-context gke_$(gcloud config get project)_us-east4_exit-tic
 | Shared-core tier, no SLA; slow starts | Dev, synthetic data | `db-custom-*` or Enterprise Plus, HA |
 | **No backups taken yet** (only run while running, at 07:00 UTC); PITR off | Data is re-seedable | On-demand `gcloud sql backups create` before risky changes; PITR for real data |
 | Cloud SQL roles on the project | No per-instance IAM in Cloud SQL | IAM Conditions on `resource.name` |
-| Compute Engine default SA still has **Editor** | No longer used by our nodes; other services may fall back to it | Remove the role in the Terraform phase, after checking dependents |
+| ~~Compute Engine default SA still has **Editor**~~ | **Closed in [Phase 5B](phase-5b-foundation.md#7-removing-editor-from-the-compute-engine-default-sa)** (2026-11-11) | — |
 | Secret rotation is manual | Pinned versions make it deliberate | A rotation runbook or scheduled job |
 | Data Access logs off (who read a secret, who logged in) | Cost | Enable for Secret Manager and Cloud SQL when needed |
 | Ingress plain HTTP, ephemeral IP | Synthetic data, minutes-long tests | Static IP, managed certificate, HTTPS redirect, IAP |
-| Everything created by hand | Learning the gcloud commands for the ACE | Terraform with remote state in GCS, importing these resources |
+| Everything created by hand | Learning the gcloud commands for the ACE | In progress: state bucket ([5A](phase-5a-bootstrap.md)), identities, IAM, secrets, Artifact Registry ([5B](phase-5b-foundation.md)) imported |
 
 ---
 
