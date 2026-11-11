@@ -51,7 +51,7 @@ in Phases 1–4, and the app itself, so Phase 5 starts from a verified state. Th
 | 4.6 | Secrets | ✅ | 3 secrets in `us-east4`, version 1 enabled each; accessor only `exit-ticket-api` on two; `postgres-admin-password` has no bindings |
 | 4.7 | Artifact Registry | ✅ | `exit-ticket`, immutable tags, 96.75 MB; cleanup policy identical to the JSON file, dry run off; `exit-ticket-nodes` is the only reader |
 | 4.8 | Network | ⚠️ | Only `default` (auto mode, us-east4 = `10.150.0.0/20`); four `default-allow-*` rules, **SSH and RDP open to `0.0.0.0/0`**; no VPC peering, no reserved ranges |
-| 4.9 | Budget | ⚠️ | $25, credits excluded, alerts at 50/90/100% actual + 100% forecasted, default email recipients. **No project filter: it covers the whole billing account** |
+| 4.9 | Budget | ✅ | $25 per calendar month, credits excluded, alerts at 50/90/100% actual + 100% forecasted, default email recipients. Had no project filter (it covered the whole billing account); **filter added 2026-11-11**, see [§2](#2-things-to-fix-or-watch) |
 | 5.1 | pytest | ✅ | 91 passed (one harmless Starlette deprecation warning) |
 | 5.2 | Full-container mode | ✅ | Built and up; `alembic upgrade head` as a one-off container → `0002 (head)`; `/`, `/teacher.html`, `/api/healthz`, `/api/readyz`, `/api/standards` all 200; stopped afterwards |
 | 5.3 | Images for GKE | ✅ | Both `linux/amd64` (`uname -m` = `x86_64` in the api), api runs as `uid=10001` |
@@ -64,7 +64,7 @@ Nothing blocks Phase 5. These are open items, in rough order of when they matter
 
 | Item | Action | When |
 |---|---|---|
-| Budget scope | Confirm this billing account pays only for this project. If not, add a project filter so alerts mean "exit-ticket" | Before Phase 5 builds anything |
+| ~~Budget scope~~ | **Done 2026-11-11.** The account pays only for this project, but a project filter was added anyway so alerts always mean "exit-ticket". `creditTypesTreatment` stayed `EXCLUDE_ALL_CREDITS` | — |
 | No Cloud SQL backup has ever been taken | Start the instance and run an on-demand backup (`gcloud sql backups create --instance=exit-ticket-db`) **before** Terraform changes it for the first time | The session that imports Cloud SQL |
 | Cloud SQL kept stopped past the deadline | Accepted: ~$2–4/month while it waits to be imported. Still stopped at the end of every session | Ongoing |
 | Default network's SSH/RDP rules open to the internet | Nothing listens on them today; settled by decision (c) | With the VPC |
@@ -281,11 +281,11 @@ Recommender, Policy Analyzer and Activity Analyzer, audit logs).
 
 ## 5. Verdict
 
-**Ready to start Phase 5.** Every check passed or has a recorded decision. Before the first `.tf` file:
+**Ready to start Phase 5.** Every check passed or has a recorded decision.
 
-1. Answer the budget scope question (one billing account, one project?).
-2. Confirm decisions (b)–(e), or change them. Decision (a) is made: import.
-3. Create a fresh branch from `main`: `git switch -c infra/phase-5-terraform`.
+- **Decisions confirmed 2026-11-11:** (a) import, including `exit-ticket-db`; (b)–(e) as recommended: bootstrap config for the state bucket, a new custom VPC, private IP alongside the public one first, Editor removed through Terraform once the new cluster works.
+- Budget project filter added.
+- Work continues on branch `infra/phase-5-terraform`.
 
 ---
 
