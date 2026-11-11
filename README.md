@@ -35,7 +35,7 @@ The original plan, and how the build actually went. Phases 3 and 4 built the GKE
 | 2 | The app on the laptop (FastAPI + Postgres in Docker) | (app skills) | Done |
 | 3 | Containers, Artifact Registry, GKE Autopilot, Kubernetes manifests, Ingress | Deploying and implementing | Done |
 | 4 | Cloud SQL, Secret Manager, Workload Identity, least-privilege node SA (by hand) | Deploying and implementing | Done |
-| 5 | Terraform: GCS state bucket, VPC, GKE Autopilot, Cloud SQL (private IP), service accounts, IAM | Planning and configuring | Next |
+| 5 | Terraform: GCS state bucket, VPC, GKE Autopilot, Cloud SQL (private IP), service accounts, IAM | Planning and configuring | Next ([pre-check](docs/phase-5-precheck.md)) |
 | 6 | Pub/Sub → BigQuery pipeline, Looker Studio dashboard (optional: live teacher dashboard via Server-Sent Events) | Deploying data solutions | |
 | 7 | Cloud Build trigger: push to GitHub → auto-deploy | Ensuring successful operation | |
 | 8 | Monitoring, alerts, logging, least-privilege IAM review, final teardown | Access, security, operations | |
