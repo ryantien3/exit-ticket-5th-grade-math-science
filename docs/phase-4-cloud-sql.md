@@ -3,16 +3,17 @@
 Phase 4 replaced the temporary in-cluster Postgres with **Cloud SQL for PostgreSQL** and the Kubernetes Secrets with
 **Secret Manager**, and gave every component its own keyless identity: the pods through **Workload Identity
 Federation for GKE**, the nodes through a dedicated service account, and the app's database login through **IAM
-database authentication**. This document is the runbook for the whole phase: the working commands in order, how to
-verify, how to tear down and rebuild. The part docs hold the full story of each session.
+database authentication**. This document holds the whole phase: the design decisions and the options considered,
+then the runbook (the working commands in order, how to verify, how to tear down and rebuild). The part docs hold the
+full story of each session.
 
 | Part | What | Doc | PR |
 |---|---|---|---|
-| **Design** | Options, trade-offs, cost, decisions, teardown policy | [phase-4-design.md](phase-4-design.md) | #13 |
+| **Design** | Options, trade-offs, cost, decisions, teardown policy | [Design decisions](#design-decisions) (below) | #13 |
 | **4A** | Cloud SQL instance, IAM database user, migrations and seed through the Auth Proxy | [phase-4a-cloud-sql.md](phase-4a-cloud-sql.md) | #14 |
 | **4B** | Secret Manager, identities, `config.py` reads secret files, proxy sidecar manifests | [phase-4b-secrets-identity.md](phase-4b-secrets-identity.md) | #15 |
 | **4C** | The app on GKE against Cloud SQL, drills, Cloud Logging | [phase-4c-gke-cloud-sql.md](phase-4c-gke-cloud-sql.md) | #16 |
-| **4D** | Teardown verification, this runbook | (this doc) | (this PR) |
+| **4D** | Teardown verification, this runbook | (this doc) | #17 |
 
 > **About the commands in this doc.** Code blocks contain commands only, no `#` comments: in zsh, `#` is not a
 > comment unless `setopt interactivecomments` is on. **Run them from the repo root** unless a block starts with `cd`.
@@ -29,6 +30,7 @@ verify, how to tear down and rebuild. The part docs hold the full story of each 
 
 **Contents**
 
+- [Design decisions](#design-decisions)
 1. [Concepts](#1-concepts)
 2. [What exists, and what it costs](#2-what-exists-and-what-it-costs)
 3. [Build from scratch](#3-build-from-scratch)
@@ -40,6 +42,135 @@ verify, how to tear down and rebuild. The part docs hold the full story of each 
 9. [Lessons learned](#9-lessons-learned)
 10. [Interview talking points](#10-interview-talking-points)
 11. [ACE exam notes](#ace-exam-notes)
+12. [Sources](#sources)
+
+---
+
+## Design decisions
+
+Written before the build (the former `phase-4-design.md`, PR #13) and corrected where the build went differently.
+
+### At a glance
+
+| Area | Decision |
+|---|---|
+| **Instance** | `exit-ticket-db`: Postgres **16**, **`--edition=enterprise`**, `db-f1-micro`, zonal in us-east4-a, SSD 10 GB, auto-increase off, daily backups (7 kept), PITR off, deletion protection on |
+| **Network** | Public IP with **no authorized networks** and **connector enforcement REQUIRED**. Private IP deferred to Terraform: the VPC and private services access exist since [5C](phase-5c-network.md); the instance moves in 5D |
+| **Connection** | Cloud SQL Auth Proxy v2 as a **native sidecar** in the api Deployment and the migrate Job; the app connects to `127.0.0.1:5432` |
+| **Database auth** | **IAM database authentication** for the app (no app password); the built-in `postgres` user keeps a password for admin use only |
+| **Secrets** | `session-secret`, `teacher-passcode` (and `postgres-admin-password`, for you only) in Secret Manager, **pinned versions**, mounted as files by the **GKE Secret Manager add-on**; the app reads them through pydantic-settings `secrets_dir` |
+| **`DATABASE_URL`** | No password any more, so it moves to the ConfigMap |
+| **Pod identity** | Kubernetes SA `api` (api and migrate), annotated so it acts as Google SA `exit-ticket-api` for both the proxy and the Secret Manager add-on |
+| **Node identity** | Dedicated Google SA `exit-ticket-nodes`, set at cluster creation |
+| **Local dev** | Compose Postgres daily; the Auth Proxy on the Mac only to test against Cloud SQL and to seed |
+| **Tooling** | gcloud by hand (the ACE tests it); Terraform with imports later ([Phase 5](phase-5-precheck.md)) |
+| **Cost control** | **Strict teardown every session** ([§7](#7-teardown)) |
+
+### Cloud SQL instance
+
+| | Enterprise | Enterprise Plus |
+|---|---|---|
+| Smallest machine | Shared-core `db-f1-micro` (0.6 GB) | `db-perf-optimized-N-2` (2 vCPU, 16 GB) |
+| Rough cost, always on | ~$8–10/month | ~$200+/month |
+| SLA | 99.95% (**none for shared-core**) | 99.99% |
+
+**gcloud defaults PostgreSQL 16+ to Enterprise Plus**, which has no shared-core tiers, so `--edition=enterprise` must
+be passed explicitly.
+
+| Setting | Choice | Why |
+|---|---|---|
+| Tier | `db-f1-micro` | Cheapest; enough for synthetic classes. No SLA: dev only |
+| Version | `POSTGRES_16` | Matches compose and the Phase 3C temporary database |
+| Availability | Zonal, us-east4-a | HA (regional, synchronous standby, automatic failover) doubles the cost. A read replica is **not** HA |
+| Storage | SSD, 10 GB (the minimum) | Storage type can't be changed later; HDD is slower |
+| Auto-increase | Off | Storage can grow but **never shrink** |
+| Backups | Daily, 7 kept | Cents per month; restore practice |
+| PITR | Off | Re-seedable synthetic data; saves WAL storage |
+| Deletion protection | On | Delete needs an explicit `patch --no-deletion-protection` first |
+| Flags | `cloudsql.iam_authentication=on` | Required for IAM database auth |
+
+### Connecting: Auth Proxy, network, database auth
+
+| | **Auth Proxy sidecar (chosen)** | Python Connector |
+|---|---|---|
+| How | App connects to `127.0.0.1:5432`; the proxy opens an encrypted, IAM-authorized tunnel | A library inside the app |
+| Code change | None (only `DATABASE_URL`) | Engine rewrite |
+| Drivers | Any | Postgres: **pg8000, asyncpg only**; the app uses **psycopg 3** |
+| Cost | One small container (~50m CPU / 128Mi, billed by Autopilot) | None |
+
+- **Public IP, no authorized networks:** nothing can connect directly. **Connector enforcement REQUIRED** accepts only
+  Auth Proxy / Connector connections, which are encrypted and authorized by IAM (`roles/cloudsql.client`).
+- **Private IP** needs private services access (`servicenetworking`, a reserved range, VPC peering), and the Mac then
+  can't reach the instance directly. It's the production practice, so it moved to the Terraform phase.
+
+IAM database authentication: the proxy (`--auto-iam-authn`) fetches a short-lived OAuth token for `exit-ticket-api`
+and uses it as the password. **There is no app database password to store or rotate.**
+
+| Piece | Value |
+|---|---|
+| Instance flag | `cloudsql.iam_authentication=on` |
+| Database user | `exit-ticket-api@PROJECT_ID.iam` (the SA email **without** `.gserviceaccount.com`), type `cloud_iam_service_account` |
+| IAM role | `roles/cloudsql.instanceUser` (permission `cloudsql.instances.login`) |
+| `DATABASE_URL` | `postgresql+psycopg://exit-ticket-api%40PROJECT_ID.iam@127.0.0.1:5432/exitticket` (`@` in a user name is `%40`) |
+| Privileges | A new IAM user has none; on Postgres 15+ not even `CREATE` on `public`. The design planned to make it the database owner; the build granted `CONNECT` on the database and `USAGE, CREATE` on schema `public` instead ([§3.3](#3-build-from-scratch)), and the user owns every table it creates |
+
+Cloud SQL IAM database users can be users, service accounts or groups; a Workload Identity *principal* isn't
+documented as one, which is why the pod identity impersonates a Google SA.
+
+### Secrets
+
+| Value | Where | Why |
+|---|---|---|
+| `SESSION_SECRET` | Secret Manager `session-secret` | Signs login tokens |
+| `TEACHER_PASSCODE` | Secret Manager `teacher-passcode` | Shared teacher sign-in |
+| App database password | **None** | IAM database auth |
+| `postgres` password | Secret Manager `postgres-admin-password`, accessible to you only | Break-glass admin; never mounted in the cluster |
+| `DATABASE_URL` | ConfigMap (project ID filled in by `sed` at apply time) | No password in it any more |
+
+How pods read them:
+
+| Option | Verdict |
+|---|---|
+| **Secret Manager add-on (CSI driver)** | **Chosen.** Google-managed, supported on Autopilot (`--enable-secret-manager`). A `SecretProviderClass` lists the secrets; the pod mounts them as files. Values never touch etcd |
+| Sync to Kubernetes Secrets | Puts values back in etcd |
+| External Secrets Operator | A third-party operator to install and patch |
+| App calls the Secret Manager API | Couples the app to GCP and complicates local dev |
+
+- Versions are **immutable** (enabled → disabled → destroyed); references are a number or `latest`. **Pinned version
+  numbers** in the `SecretProviderClass`, like images by digest. To rotate: add a version, bump the number,
+  `kubectl rollout restart`. Rotating `SESSION_SECRET` signs everyone out.
+- The add-on's auto-rotation stays off: the app reads settings once at startup. Secret Manager rotation **schedules
+  only send a Pub/Sub notification**; they don't rotate anything.
+
+### Identity and IAM
+
+| | Direct grant to the KSA principal | **Impersonate a Google SA (chosen)** |
+|---|---|---|
+| Member | `principal://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/PROJECT_ID.svc.id.goog/subject/ns/exit-ticket/sa/api` | Google SA `exit-ticket-api`, impersonated by `serviceAccount:PROJECT_ID.svc.id.goog[exit-ticket/api]` |
+| Cloud SQL IAM database user | Not documented | **Yes** (a service account) |
+| Setup | One step | Google SA + `roles/iam.workloadIdentityUser` + KSA annotation `iam.gke.io/gcp-service-account` |
+
+| Principal | Role | Granted on | Why |
+|---|---|---|---|
+| `serviceAccount:PROJECT_ID.svc.id.goog[exit-ticket/api]` | `roles/iam.workloadIdentityUser` | The SA `exit-ticket-api` | The KSA may act as the SA |
+| `exit-ticket-api` | `roles/cloudsql.client` | Project (Cloud SQL has no per-instance IAM) | The proxy may connect |
+| `exit-ticket-api` | `roles/cloudsql.instanceUser` | Project | IAM database login |
+| `exit-ticket-api` | `roles/secretmanager.secretAccessor` | **Each secret**: `session-secret`, `teacher-passcode` | The add-on acts as the annotated SA (proven in 4C; a grant to the KSA principal alone was denied) |
+| You | `roles/iam.serviceAccountTokenCreator` | The SA `exit-ticket-api` | Seed from the Mac as the app |
+| `exit-ticket-nodes` | `roles/container.defaultNodeServiceAccount` | Project | Node logging, monitoring, metadata |
+| `exit-ticket-nodes` | `roles/artifactregistry.reader` | **The `exit-ticket` repository** | Pull images |
+
+Attaching `exit-ticket-nodes` to the cluster needs `iam.serviceAccounts.actAs` on it (in `roles/iam.serviceAccountUser`;
+you have it as Owner). Since [Phase 5B](phase-5b-foundation.md) all of this is managed by Terraform.
+
+### Verified during the build
+
+The design listed four things to confirm; all were:
+- The Secret Manager add-on with a KSA that impersonates a Google SA: with the KSA annotated, the add-on acts as the
+  SA; a grant to the KSA principal alone gave `PermissionDenied` (4C).
+- `automountServiceAccountToken: false` with Workload Identity works (4C).
+- The exact `gcloud sql instances create` flags against `--help` on the day (4A).
+- Autopilot's resource adjustments for the proxy sidecar: none (4C).
 
 ---
 
@@ -93,8 +224,13 @@ Google SA acts as that SA for every Google API, including the Secret Manager add
 
 ### The proxy as a native sidecar
 
-`initContainers` + `restartPolicy: Always`: it starts first, the main container waits for its startup probe
-(`/startup` on 9090), it stops last, and in the migrate Job it's stopped when alembic exits so the Job completes.
+A Job completes only when **all** its containers exit; an ordinary proxy sidecar never does, so the Job would hang
+at `1/2 Running`. A **native sidecar** (`initContainers` + `restartPolicy: Always`, GA since Kubernetes 1.33) fixes it:
+1. It starts before the main container, which waits for its **startup probe** (`/startup` on 9090), so alembic
+   never races the tunnel.
+2. It runs alongside the main container and is restarted if it crashes.
+3. When the main container exits, Kubernetes stops it and the **Job completes**.
+4. In the Deployment it stops **after** the app on shutdown, so in-flight queries finish.
 
 ---
 
@@ -279,6 +415,10 @@ The most likely problems; the full tables are in [4A §13](phase-4a-cloud-sql.md
 
 ## 7. Teardown
 
+**Policy (enforced): about $0 whenever the app isn't being used.** A session isn't finished until the checklist
+below has been run and its output checked; the next session starts by running the same checklist before creating
+anything.
+
 **Order: Ingress (if applied) → namespace → cluster, then stop Cloud SQL, then verify.** The controllers that clean
 up load balancers and NEGs run inside the cluster, so the cluster must exist while they finish.
 
@@ -316,7 +456,7 @@ Healthy (Phase 4D, 2026-10-28): no clusters; six `Listed 0 items.`; `exit-ticket
 |---|---|
 | Service accounts, IAM bindings, secrets | Free; recreating them means repeating §3.1–3.2 |
 | Images | Cents; the manifests pin their digests |
-| Cloud SQL, **stopped** | ~$2–4/month; saves ~15–20 minutes next time. **Delete it if no session is planned within 7 days** |
+| Cloud SQL, **stopped** | ~$2–4/month; saves ~15–20 minutes next time. **Delete it if no session is planned within 7 days.** Exception (2026-11-11): `exit-ticket-db` is kept stopped on purpose so Phase 5D can import it into Terraform |
 
 ### Deleting the instance
 
@@ -339,7 +479,7 @@ kubectl config delete-context gke_$(gcloud config get project)_us-east4_exit-tic
 | Gap | Why it's acceptable now | Later |
 |---|---|---|
 | One identity and database user for api and migrate, so the api has DDL rights | Same app; simple grants | Separate KSAs/SAs; migrate owns the schema, api gets DML only |
-| Cloud SQL public IP | No authorized networks, connector enforcement, IAM | Private IP (private services access) |
+| Cloud SQL public IP | No authorized networks, connector enforcement, IAM | Private IP: VPC and private services access ready ([5C](phase-5c-network.md)); instance in 5D |
 | Shared-core tier, no SLA; slow starts | Dev, synthetic data | `db-custom-*` or Enterprise Plus, HA |
 | **No backups taken yet** (only run while running, at 07:00 UTC); PITR off | Data is re-seedable | On-demand `gcloud sql backups create` before risky changes; PITR for real data |
 | Cloud SQL roles on the project | No per-instance IAM in Cloud SQL | IAM Conditions on `resource.name` |
@@ -347,7 +487,7 @@ kubectl config delete-context gke_$(gcloud config get project)_us-east4_exit-tic
 | Secret rotation is manual | Pinned versions make it deliberate | A rotation runbook or scheduled job |
 | Data Access logs off (who read a secret, who logged in) | Cost | Enable for Secret Manager and Cloud SQL when needed |
 | Ingress plain HTTP, ephemeral IP | Synthetic data, minutes-long tests | Static IP, managed certificate, HTTPS redirect, IAP |
-| Everything created by hand | Learning the gcloud commands for the ACE | In progress: state bucket ([5A](phase-5a-bootstrap.md)), identities, IAM, secrets, Artifact Registry ([5B](phase-5b-foundation.md)) imported |
+| Everything created by hand | Learning the gcloud commands for the ACE | In progress: state bucket ([5A](phase-5a-bootstrap.md)); identities, IAM, secrets, Artifact Registry imported ([5B](phase-5b-foundation.md)); network ([5C](phase-5c-network.md)) |
 
 ---
 
@@ -401,7 +541,9 @@ session, a written teardown policy with a verification checklist, and a budget t
   hand.
 - Backups: automated (window, retention) + on-demand; restore overwrites the target; PITR needs backups + transaction
   logs; exports to Cloud Storage are separate. Deleting the instance deletes its backups.
-- Storage grows (auto-increase) but never shrinks; storage type fixed at creation. Tier changes restart the instance.
+- Storage grows (auto-increase) but never shrinks; storage type (SSD/HDD) fixed at creation. Tier changes restart the
+  instance.
+- The `postgres` user has `cloudsqlsuperuser`, not true superuser.
 - Maintenance windows and deny periods. Stop/start: `--activation-policy=NEVER|ALWAYS`; stopped still bills storage
   and IP.
 - Connection name `PROJECT:REGION:INSTANCE`. IAM database auth: flag `cloudsql.iam_authentication=on`, user types
@@ -422,6 +564,7 @@ session, a written teardown policy with a verification checklist, and a budget t
 - `secretAccessor` (values), `viewer` (metadata only), `secretVersionAdder` / `secretVersionManager`, `admin`; grant per
   secret. Versions immutable (enabled / disabled / destroyed); replication automatic or user-managed, fixed at
   creation; CMEK via Cloud KMS. Reading a value is a **Data Access** log (off by default).
+- Read a value with `gcloud secrets versions access VERSION --secret=NAME`. Rotation schedules only publish to Pub/Sub.
 
 **Workload Identity Federation for GKE**
 - The answer to "how does a pod authenticate without keys". Annotated KSA → acts as the Google SA (needs
@@ -436,3 +579,22 @@ session, a written teardown policy with a verification checklist, and a budget t
 
 **gcloud**
 - GA vs `beta` vs `alpha` command groups; `--help | grep` before relying on a flag; `gcloud sql operations list|wait`.
+
+---
+
+## Sources
+
+- [Cloud SQL: Create instances (default edition)](https://docs.cloud.google.com/sql/docs/postgres/create-instance)
+- [Cloud SQL for PostgreSQL release notes](https://docs.cloud.google.com/sql/docs/postgres/release-notes)
+- [gcloud sql instances create](https://docs.cloud.google.com/sdk/gcloud/reference/sql/instances/create)
+- [Cloud SQL editions overview](https://docs.cloud.google.com/sql/docs/postgres/editions-intro)
+- [Cloud SQL pricing](https://cloud.google.com/sql/pricing)
+- [Start, stop, and restart instances](https://docs.cloud.google.com/sql/docs/mysql/start-stop-restart-instance)
+- [Cloud SQL FAQ](https://docs.cloud.google.com/sql/faq)
+- [Manage users with IAM database authentication](https://cloud.google.com/sql/docs/postgres/add-manage-iam-users)
+- [Identity federation: products and limitations](https://docs.cloud.google.com/iam/docs/federated-identity-supported-services)
+- [Authenticate to Google Cloud APIs from GKE workloads](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/workload-identity)
+- [Use the Secret Manager add-on with GKE](https://docs.cloud.google.com/secret-manager/docs/secret-manager-managed-csi-component)
+- [Synchronize secrets to Kubernetes Secrets](https://docs.cloud.google.com/secret-manager/docs/sync-k8-secrets)
+- [Cloud SQL language connectors](https://docs.cloud.google.com/sql/docs/postgres/connect-connectors)
+- [Connect to Cloud SQL from GKE](https://docs.cloud.google.com/sql/docs/mysql/connect-kubernetes-engine)

@@ -1,6 +1,6 @@
 # Phase 4A — Cloud SQL for PostgreSQL
 
-Phase 4A creates the Cloud SQL instance from the [Phase 4 design](phase-4-design.md), logs in with **IAM database
+Phase 4A creates the Cloud SQL instance from the [Phase 4 design](phase-4-cloud-sql.md#design-decisions), logs in with **IAM database
 authentication** through the **Cloud SQL Auth Proxy** on the Mac, runs the migrations and the seed **as the app's
 own identity**, and stops the instance at the end. No cluster yet: the api moves onto Cloud SQL in a later part.
 
@@ -320,7 +320,7 @@ gcloud sql instances patch exit-ticket-db --activation-policy=ALWAYS
 | `ON_DEMAND` | Legacy first generation only |
 
 While stopped, **still billed**: the 10 GB SSD, the public IPv4 address, stored backups. Free: the secret, the
-service account, IAM. Under the [teardown policy](phase-4-design.md#11-teardown-policy-enforced), the instance is
+service account, IAM. Under the [teardown policy](phase-4-cloud-sql.md#7-teardown), the instance is
 deleted if no session is planned within 7 days.
 
 ---

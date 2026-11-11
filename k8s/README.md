@@ -76,4 +76,4 @@ gcloud compute network-endpoint-groups list
 gcloud container clusters delete exit-ticket --region=us-east4
 gcloud sql instances patch exit-ticket-db --activation-policy=NEVER
 ```
-Full verification list: [docs/phase-4-design.md §11](../docs/phase-4-design.md#11-teardown-policy-enforced).
+Full verification list: [docs/phase-4-cloud-sql.md#design-decisions §11](../docs/phase-4-cloud-sql.md#7-teardown).

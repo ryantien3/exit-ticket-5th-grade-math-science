@@ -319,7 +319,7 @@ balancer to delete first.)
 
 Verified: no clusters; `exit-ticket-db` `STOPPED`; no forwarding rules, backend services, NEGs, disks, addresses or
 instances; only the four `default-allow-*` firewall rules; no `cloud-sql-proxy` process on the Mac. The stopped
-instance still bills its disk, IP and backups; per the [teardown policy](phase-4-design.md#11-teardown-policy-enforced)
+instance still bills its disk, IP and backups; per the [teardown policy](phase-4-cloud-sql.md#7-teardown)
 it's deleted if no session follows within 7 days.
 
 ---
