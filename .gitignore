@@ -224,6 +224,16 @@ __marimo__/
 *.tfstate
 *.tfstate.*
 *.tfvars
+*.tfvars.json
+!*.tfvars.example
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+*.tfplan
+tfplan
+.terraformrc
+terraform.rc
 .terraform.lock.hcl.bak
 crash.log
 
