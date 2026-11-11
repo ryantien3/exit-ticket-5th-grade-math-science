@@ -69,7 +69,7 @@ Nothing blocks Phase 5. These are open items, in rough order of when they matter
 | Cloud SQL kept stopped past the deadline | Accepted: ~$2–4/month while it waits to be imported. Still stopped at the end of every session | Ongoing |
 | Default network's SSH/RDP rules open to the internet | Nothing listens on them today; settled by decision (c) | With the VPC |
 | Compute Engine default SA has Editor | Decision (e) | After the Terraform cluster works |
-| `servicenetworking` is already on; [phase-4-design §4](phase-4-design.md#4-connecting-auth-proxy-network-database-auth) says it wasn't | No action: no peering or range exists, so private services access was never set up | — |
+| `servicenetworking` is already on; [the Phase 4 design](phase-4-cloud-sql.md#connecting-auth-proxy-network-database-auth) says it wasn't | No action: no peering or range exists, so private services access was never set up | — |
 | Outdated brew formulae; macOS 14 is a Homebrew Tier 3 configuration | Upgrade in a quiet moment, not mid-phase (Python upgrades can disturb the `.venv`) | Any time |
 
 ---
