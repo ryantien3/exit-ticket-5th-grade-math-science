@@ -360,6 +360,10 @@ Then open the app with `kubectl -n exit-ticket port-forward svc/web 8080:80` →
 
 ## 4. Starting a session
 
+> **Since [Phase 5D](phase-5d-cloud-sql.md) Terraform owns the instance.** Start and stop it from
+> `infra/terraform/data` with `terraform apply -var="activation_policy=ALWAYS"` / `terraform apply`, not the
+> `gcloud … patch` lines below: a gcloud change would show up as drift in the next plan.
+
 **If the instance is stopped** (the usual case), start it first: it takes ~11.5 minutes, longer than the cluster, so
 create the cluster (§3.5) in a second tab meanwhile:
 ```bash
