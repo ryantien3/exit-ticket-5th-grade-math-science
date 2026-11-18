@@ -423,6 +423,10 @@ The most likely problems; the full tables are in [4A §13](phase-4a-cloud-sql.md
 below has been run and its output checked; the next session starts by running the same checklist before creating
 anything.
 
+> **Since [Phase 5E](phase-5e-cluster.md)** the cluster and the stop are Terraform: `terraform destroy` in
+> `infra/terraform/cluster`, then `terraform apply` in `infra/terraform/data`. The kubectl lines and the Verify list
+> below are unchanged.
+
 **Order: Ingress (if applied) → namespace → cluster, then stop Cloud SQL, then verify.** The controllers that clean
 up load balancers and NEGs run inside the cluster, so the cluster must exist while they finish.
 
