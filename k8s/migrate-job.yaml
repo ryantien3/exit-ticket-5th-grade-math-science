@@ -46,6 +46,9 @@ spec:
             - --http-address=0.0.0.0
             - --http-port=9090
             - --exit-zero-on-sigterm
+            # Dial the instance's private IP (10.40.x.x, private services access) instead of
+            # its public one. Only works from inside exit-ticket-vpc (Phase 5E).
+            - --private-ip
             - PROJECT_ID:us-east4:exit-ticket-db
           ports:
             - name: proxy-health

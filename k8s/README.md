@@ -27,9 +27,16 @@ sed "s/PROJECT_ID/$(gcloud config get project)/g" k8s/api.yaml | kubectl apply -
 
 ## Prerequisites
 
-- Cloud SQL `exit-ticket-db` running (`gcloud sql instances patch exit-ticket-db --activation-policy=ALWAYS`).
-- The cluster created with `--service-account=exit-ticket-nodes@…` and `--enable-secret-manager`.
-- The secrets and IAM bindings from [docs/phase-4b-secrets-identity.md](../docs/phase-4b-secrets-identity.md).
+Since [Phase 5E](../docs/phase-5e-cluster.md) the infrastructure comes from Terraform:
+- Cloud SQL running: `terraform apply -var="activation_policy=ALWAYS"` in `infra/terraform/data` (~11 minutes).
+- The cluster: `terraform apply` in `infra/terraform/cluster` (~5 minutes; private nodes, node SA
+  `exit-ticket-nodes`, Secret Manager add-on, Workload Identity).
+- kubectl through the cluster's DNS endpoint (IAM-authorized; there is no external IP endpoint):
+  `gcloud container clusters get-credentials exit-ticket --region=us-east4 --dns-endpoint`.
+- Secrets, service accounts and IAM: the `foundation` layer ([5B](../docs/phase-5b-foundation.md)).
+
+The proxy sidecars use `--private-ip`: they reach Cloud SQL at its private IP on `exit-ticket-vpc`, so they only
+work inside that VPC.
 
 ## Apply order
 
@@ -70,10 +77,13 @@ the health-check firewall rule run inside the cluster, so it must still exist wh
 kubectl delete -f k8s/ingress.yaml --wait=true
 kubectl delete namespace exit-ticket
 ```
-Wait 2–3 minutes, then:
+Wait 2–3 minutes (only if an Ingress was applied), then:
 ```bash
 gcloud compute network-endpoint-groups list
-gcloud container clusters delete exit-ticket --region=us-east4
-gcloud sql instances patch exit-ticket-db --activation-policy=NEVER
+cd infra/terraform/cluster
+terraform destroy
+cd ../data
+terraform apply
 ```
+(`terraform apply` in `data/` with no `-var` stops Cloud SQL.)
 Full verification list: [docs/phase-4-cloud-sql.md#design-decisions §11](../docs/phase-4-cloud-sql.md#7-teardown).
