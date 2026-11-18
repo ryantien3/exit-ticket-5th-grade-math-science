@@ -7,8 +7,8 @@ destroy in reverse.
 |---|---|---|---|---|
 | [`bootstrap/`](bootstrap/) | The state bucket | `bootstrap` | Forever | Done ([5A](../../docs/phase-5a-bootstrap.md)) |
 | [`foundation/`](foundation/) | APIs, service accounts, IAM, secret containers, Artifact Registry ([5B](../../docs/phase-5b-foundation.md)); VPC, subnet, private services access ([5C](../../docs/phase-5c-network.md)) | `foundation` | Months | Done |
-| `data/` | Cloud SQL (stop/start with `activation_policy`) | `data` | Months, stopped between sessions | Next |
-| `cluster/` | GKE Autopilot | `cluster` | Created and destroyed every session | |
+| [`data/`](data/) | Cloud SQL instance, database, IAM user; private IP on the VPC ([5D](../../docs/phase-5d-cloud-sql.md)) | `data` | Months, stopped between sessions | Done |
+| `cluster/` | GKE Autopilot | `cluster` | Created and destroyed every session | Next |
 
 In any layer, on a new clone:
 ```bash
@@ -16,6 +16,9 @@ cp terraform.tfvars.example terraform.tfvars
 terraform init -backend-config="bucket=$(gcloud config get project)-tfstate"
 terraform plan
 ```
+
+In `data/`, the default is **stopped**: start with `terraform apply -var="activation_policy=ALWAYS"`, stop with a
+plain `terraform apply`, and pass the `-var` on every plan while it's running.
 
 Rules: no project ID in committed files; never commit `terraform.tfvars`, state or plan files; commit
 `.terraform.lock.hcl` (with `darwin_arm64` and `linux_amd64` checksums); `versions.tf` is identical in every layer.
