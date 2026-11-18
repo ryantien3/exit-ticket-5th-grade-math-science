@@ -251,6 +251,11 @@ A 3-hour session costs about $0.40 gross, a few cents net of credits.
 
 ## 3. Build from scratch
 
+> **Superseded by Terraform ([Phase 5 runbook §3](phase-5-terraform.md#3-build-from-scratch)).** Identities, IAM,
+> secret containers, Artifact Registry, the network, Cloud SQL and the cluster are now built by the Terraform layers;
+> running these gcloud commands against the same project would create drift or fail with "already exists". They stay
+> here as **gcloud practice for the ACE exam** and as the record of how Phase 4 was built.
+
 The working commands, in order. Free steps first; 💰 marks where billing starts. Details and outputs are in the part
 docs.
 
@@ -360,9 +365,11 @@ Then open the app with `kubectl -n exit-ticket port-forward svc/web 8080:80` →
 
 ## 4. Starting a session
 
-> **Since [Phase 5D](phase-5d-cloud-sql.md) Terraform owns the instance.** Start and stop it from
-> `infra/terraform/data` with `terraform apply -var="activation_policy=ALWAYS"` / `terraform apply`, not the
-> `gcloud … patch` lines below: a gcloud change would show up as drift in the next plan.
+> **Superseded by Terraform ([Phase 5 runbook §4](phase-5-terraform.md#4-starting-a-session)).** Since
+> [5D](phase-5d-cloud-sql.md) Terraform owns the instance and since [5E](phase-5e-cluster.md) the cluster: start with
+> `terraform apply -var="activation_policy=ALWAYS"` in `infra/terraform/data` and `terraform apply` in
+> `infra/terraform/cluster`, not the `gcloud` lines below (a gcloud change shows up as drift in the next plan). Kept as
+> gcloud practice.
 
 **If the instance is stopped** (the usual case), start it first: it takes ~11.5 minutes, longer than the cluster, so
 create the cluster (§3.5) in a second tab meanwhile:
