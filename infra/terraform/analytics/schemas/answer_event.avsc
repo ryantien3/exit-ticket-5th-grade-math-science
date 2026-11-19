@@ -1,0 +1,22 @@
+{
+  "type": "record",
+  "name": "AnswerEvent",
+  "namespace": "exitticket.analytics",
+  "doc": "One graded answer to one exit-ticket question. Contract between the API (app/api/app/events.py) and BigQuery (exit_ticket_analytics.answer_events). Every field is required: no unions, so JSON-encoded messages need no Avro union wrapping. Change deliberately and bump schema_version. See docs/phase-6a-design.md.",
+  "fields": [
+    {"name": "event_id", "type": "string", "doc": "UUID made once per event. Duplicates share it; the view dedups on it."},
+    {"name": "event_type", "type": "string", "doc": "Always 'answer_submitted' for now."},
+    {"name": "schema_version", "type": "int", "doc": "2 for this schema. Version 1 was the log-only shape before Phase 6."},
+    {"name": "answered_at", "type": {"type": "long", "logicalType": "timestamp-micros"}, "doc": "When the answer was graded, UTC, as microseconds since 1970-01-01. The table is partitioned on it."},
+    {"name": "answer_id", "type": "string", "doc": "UUID of the answers row in Cloud SQL."},
+    {"name": "student_id", "type": "string", "doc": "Internal student UUID. Pseudonymous: no name, no login code."},
+    {"name": "classroom_id", "type": "string", "doc": "Classroom UUID."},
+    {"name": "ticket_id", "type": "string", "doc": "Exit ticket UUID. With student_id, identifies one submission (no retakes yet)."},
+    {"name": "question_id", "type": "string", "doc": "Question UUID."},
+    {"name": "standard_code", "type": "string", "doc": "NY standard the question is tagged with, e.g. 'NY-5.NF.4' or '5-PS1-2'."},
+    {"name": "standard_domain", "type": "string", "doc": "The standard's domain, e.g. 'NY-5.NF' or '5-PS1'."},
+    {"name": "subject", "type": "string", "doc": "'math' or 'science'."},
+    {"name": "chosen_choice", "type": "string", "doc": "The choice the student picked: 'A', 'B', 'C' or 'D'."},
+    {"name": "is_correct", "type": "boolean", "doc": "Graded on the server."}
+  ]
+}
