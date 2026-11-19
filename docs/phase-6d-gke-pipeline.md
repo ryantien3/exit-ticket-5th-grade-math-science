@@ -2,7 +2,12 @@
 
 Phase 6D runs the [6C](phase-6c-publisher.md) publisher on GKE, where it publishes as **`exit-ticket-api`** through
 Workload Identity. It proves the whole path, from a browser submission to a BigQuery row, then breaks it four ways on
-purpose. It also adds a month of **synthetic** history so the Looker Studio report (6E) has something to show.
+purpose. A first **synthetic** history went straight to the topic. Then two problems turned up, and 6D fixed them:
+- **The data was in the wrong place.** That history bypassed Cloud SQL, so it's replaced by scripts that write to Cloud
+  SQL first and republish from there (§6).
+- **The `event_id` was random,** so a republish would have been counted twice. It's now derived from the answer (§7).
+
+The new scripts run at the start of 6E (§9).
 Everything was torn down at the end, except the long-lived analytics layer.
 
 | Part | What | PR |
@@ -10,8 +15,8 @@ Everything was torn down at the end, except the long-lived analytics layer.
 | 6A | Design, contract, Avro schema | #28 |
 | 6B | `analytics` Terraform layer | #29 |
 | 6C | Publisher in the API | #30 |
-| **6D** | New image on GKE; `PUBSUB_TOPIC`; end to end; four drills; synthetic backfill | (this PR) |
-| 6E | Looker Studio | |
+| **6D** | New image on GKE; `PUBSUB_TOPIC`; end to end; four drills; synthetic backfill (then replaced); `event_id` fix (#31) | (this PR) |
+| 6E | Cloud SQL history + idempotent republish + cleanup (§9), then Looker Studio | |
 
 > **About the commands in this doc.** Code blocks contain commands only, no `#` comments: in zsh, `#` is not a
 > comment unless `setopt interactivecomments` is on. No project ID or project number is committed. Manifests use the
@@ -24,12 +29,13 @@ Everything was torn down at the end, except the long-lived analytics layer.
 3. [Session and deploy](#3-session-and-deploy)
 4. [End to end on GKE](#4-end-to-end-on-gke)
 5. [Drills](#5-drills)
-6. [Synthetic backfill](#6-synthetic-backfill)
-7. [Teardown and verification](#7-teardown-and-verification)
-8. [Open items](#8-open-items)
-9. [Lessons learned](#9-lessons-learned)
-10. [Interview talking points](#10-interview-talking-points)
-11. [ACE exam notes](#ace-exam-notes)
+6. [Synthetic backfill (published, then replaced)](#6-synthetic-backfill-published-then-replaced)
+7. [The event_id flaw, and the fix (#31)](#7-the-event_id-flaw-and-the-fix-31)
+8. [Teardown and verification](#8-teardown-and-verification)
+9. [Moved to 6E](#9-moved-to-6e)
+10. [Lessons learned](#10-lessons-learned)
+11. [Interview talking points](#11-interview-talking-points)
+12. [ACE exam notes](#ace-exam-notes)
 
 ---
 
@@ -69,7 +75,11 @@ happening).
 | [k8s/configmap.yaml](../k8s/configmap.yaml) | `PUBSUB_TOPIC: projects/PROJECT_ID/topics/answer-events` |
 | [k8s/web.yaml](../k8s/web.yaml) | **Unchanged**: `app/web/` was last changed on 2026-10-22, before its current digest (2026-10-27) |
 | [infra/terraform/analytics/drill.tf](../infra/terraform/analytics/drill.tf) | The dead-letter drill (§5.3). **Off by default**: `-var="dlq_drill=true"` creates it, a plain apply removes it |
-| [scripts/backfill-answer-events.py](../scripts/backfill-answer-events.py) | Synthetic backfill (§6). Dry run by default |
+| ~~`scripts/backfill-answer-events.py`~~ | Used once in this session (§6), then **deleted**: it published straight to the topic, bypassing Cloud SQL |
+| [scripts/seed-history.py](../scripts/seed-history.py) | Replacement, part 1: synthetic history **in Cloud SQL** (releases + submissions). Dry run unless `--apply`. Tested locally; runs in 6E (§9) |
+| [scripts/republish-answers.py](../scripts/republish-answers.py) | Replacement, part 2: Cloud SQL → topic with deterministic `event_id`s, skipping `answer_id`s already in BigQuery, reconciling every run. Tested offline; runs in 6E (§9) |
+| [app/api/requirements-dev.txt](../app/api/requirements-dev.txt) | `google-cloud-bigquery==3.47.0` (2026-10-29) for the republisher. Operator tool only, never in the image |
+| `app/api/app/events.py` (via #31, merged into this branch) | Deterministic `event_id` (§7) |
 
 `scripts/push-images.sh` always builds both images under the new commit tag. So a web image `web:3f77bc1` was pushed
 too, but not deployed: harmless, and the repository's cleanup policy limits how many are kept.
@@ -299,35 +309,83 @@ This is why the view dedups on **`event_id`**. The duplicate got a **new** `mess
 
 ---
 
-## 6. Synthetic backfill
+## 6. Synthetic backfill (published, then replaced)
 
-[scripts/backfill-answer-events.py](../scripts/backfill-answer-events.py) publishes contract-v2 events so the report
-has history.
-
-| Property | How |
-|---|---|
-| Real students, tickets, questions | Built with `AnswerEvent` from `app/events.py` and `stable_id` from `seed.py`: the 24 seeded students and 6 tickets with their **database IDs** |
-| Simulated answers | Per-student ability, per-standard difficulty, a little growth each week. **No Cloud SQL rows** |
-| Dates | School days over the last 4 weeks, 9:00–15:00 New York time |
-| **Marked** | The Pub/Sub attribute **`source=synthetic-backfill`**. It lands in the `attributes` JSON column through `write_metadata`, so **no schema change**. Filter with `JSON_VALUE(attributes, "$.source")` |
-| Safe to rerun | Deterministic `uuid5` event IDs: a second run only creates duplicates the view removes |
-| Safe by default | Dry run unless `--publish --topic projects/…/topics/answer-events`; every message is checked against the `.avsc` with fastavro first |
-| Who publishes | Your user's ADC, from the Mac: an operator tool, not the app |
-
-```bash
-app/api/.venv/bin/python scripts/backfill-answer-events.py
-app/api/.venv/bin/python scripts/backfill-answer-events.py --publish --topic "projects/$PROJECT/topics/answer-events"
-```
+The first approach, `scripts/backfill-answer-events.py`, built 490 contract-v2 events for the 24 seeded students and 6
+tickets (seed IDs, simulated correctness, school days over 4 weeks). It published them **straight to the topic**, each
+marked with the Pub/Sub attribute `source=synthetic-backfill`. That attribute lands in the `attributes` column through
+`write_metadata`, so no schema change was needed.
 
 | Check | Result |
 |---|---|
 | Publish | `published 490, failed 0, unconfirmed 0` |
 | Landed | 490 rows = 490 events, 24 students, 14 days, 2026-10-21 → 2026-11-13 |
-| Through the view, % correct | 5-PS1-1 89.5 · 5-PS1-2 84.2 · 5-PS1-3 94.7 · 5-PS1-4 76.3 · NY-5.NBT.3 65.8 · NY-5.NBT.4 78.9 · NY-5.NBT.7 81.5 · NY-5.NF.1 71.6 · NY-5.NF.4 58.7: identical to the dry run |
+| Through the view, % correct | 5-PS1-1 89.5 · 5-PS1-2 84.2 · 5-PS1-3 94.7 · 5-PS1-4 76.3 · NY-5.NBT.3 65.8 · NY-5.NBT.4 78.9 · NY-5.NBT.7 81.5 · NY-5.NF.1 71.6 · NY-5.NF.4 58.7 |
+
+**Why it was replaced.** These events have **no rows in Cloud SQL**, which is supposed to be the source of truth. So
+BigQuery would show answers the app's own mastery pages can't see, and no reconciliation could ever balance. The
+replacement does it in the right order:
+
+1. **[seed-history.py](../scripts/seed-history.py)** writes the synthetic history **into Cloud SQL**: releases dated in
+   the past, then one submission per (student, ticket) for most students.
+   - Graded like the app.
+   - Answer IDs are `uuid5` and rows use `ON CONFLICT DO NOTHING`.
+   - A (student, ticket) pair that already has answers is skipped, so the unique rule always holds.
+   - It refuses to run unless the class holds exactly the 24 synthetic seed names.
+2. **[republish-answers.py](../scripts/republish-answers.py)** publishes from Cloud SQL, as described in §7.
+
+Tested locally (6D), not yet run against Cloud SQL:
+
+| Test | Result |
+|---|---|
+| seed-history, throwaway DB (migrated + seeded) | Dry run: 500 answers in 125 submissions, 58.3–79.5% correct by standard. `--apply`: inserted 500. Rerun: skipped 500, inserted 0 |
+| republish, the same DB, offline | 500 answers read; every `event_id` == `answer_event_id(answer_id)`; a rebuilt message is byte-identical; the reconciliation flags missing, extra and doubled rows |
+
+The 490 `synthetic-backfill` rows are still in BigQuery, to be deleted in 6E (§9).
 
 ---
 
-## 7. Teardown and verification
+## 7. The `event_id` flaw, and the fix (#31)
+
+**The flaw.** In 6C, `event_id` was `Field(default_factory=uuid.uuid4)`, a new random ID per `AnswerEvent` built.
+
+- **That deduplicates retries of the same object.** The library resends identical bytes, which drill 5.4 confirmed.
+- **It doesn't deduplicate a republish from Cloud SQL.** That builds a **new** object, which got a **new** random ID, so
+  the view (`PARTITION BY event_id`) would count the answer twice.
+
+6A §9 and 6C §4 had called such a republish "safe to run twice". They were wrong, and both are corrected.
+
+**The fix** ([#31](https://github.com/ryantien3/exit-ticket-5th-grade-math-science/pull/31)):
+
+- **`event_id = uuid5(EVENT_NAMESPACE, "answer_submitted:" + answer_id)`,** with a fixed namespace constant in
+  `app/events.py`.
+- **Still a UUID string,** so there's no Avro or table change, and `schema_version` stays 2.
+- **A mismatching explicit `event_id` is rejected.**
+- **Tests (111 passing):** the same answer gives the same ID across builds; different answers give different IDs; a
+  pinned known value guards the namespace; the endpoint publishes `answer_event_id(row.id)`.
+
+**Why the republisher also skips by `answer_id`.** Rows published before the fix (the 6B smoke test, the 6C local run,
+this session's GKE answers) keep their random `event_id`s. A republished copy of one of them would get the deterministic
+ID, so the view would keep both. Skipping any `answer_id` already in BigQuery prevents that. The deterministic ID then
+covers the remaining case: two runs before BigQuery has caught up.
+
+**Not yet in an image.** `k8s/api.yaml` still points at `451e6ff5…`, which is the pre-fix code. Nothing runs between
+sessions, so nothing is affected. The next cluster session builds and deploys the fixed image (§9).
+
+**Would a column change replace the real table?** Answered with `terraform plan` only, by temporarily editing the real
+table's JSON and then restoring it (`git diff` clean afterwards):
+
+| Change | Plan |
+|---|---|
+| Add `maxLength = 1` to `chosen_choice` | `updated in-place`, `1 to change` |
+| Rename `chosen_choice` → `choice` | `must be replaced` (`forces replacement`) → **`Error: Instance cannot be destroyed … has lifecycle.prevent_destroy`** |
+
+`prevent_destroy` refuses a data-losing replacement at plan time. The 5.3 drill never touched the real table: it used
+its own drill table.
+
+---
+
+## 8. Teardown and verification
 
 The runbook's §5 sequence:
 
@@ -355,26 +413,34 @@ The verify block (runbook §6, plus the analytics checks):
 
 ---
 
-## 8. Open items
+## 9. Moved to 6E
 
-**Test rows in `answer_events`, still to delete.** Three of the four were streamed minutes before the end of the session,
-and BigQuery can refuse DML on recently streamed rows. It needs only BigQuery (no cluster, no Cloud SQL), so it can run
-any time later:
+These were planned for the end of 6D and moved to the start of 6E, so a fresh session does them first.
+
+| # | Step | Needs | Time |
+|---|---|---|---|
+| 1 | **Unknown-key test:** publish one marked message with an extra key (e.g. a fake `login_code`); the row must land, with no trace of the key anywhere in it (6A §7) | BigQuery, Pub/Sub only | ~2 min |
+| 2 | **Delete the rows that aren't in Cloud SQL** (statement below) | BigQuery only | ~2 min |
+| 3 | **`seed-history.py`** through `cloud-sql-proxy` on the public path, as `exit-ticket-api` (5D): dry run, then `--apply` | Cloud SQL running | ~15 min incl. start |
+| 4 | **`republish-answers.py`**: dry run, `--publish`, then **run again: `to publish: 0`** and the reconciliation clean (view answers == Cloud SQL answers, nothing extra, nothing doubled) | Cloud SQL, BigQuery, Pub/Sub | ~5 min |
+| 5 | **New image with the fix**, digest into `k8s/api.yaml` and `migrate-job.yaml`; check one GKE submission's `event_id` == `answer_event_id(answer_id)` | Cluster | With the next cluster session |
+
+The step-2 statement:
 
 ```bash
-bq --project_id="$(gcloud config get project)" --dataset_id=exit_ticket_analytics query --use_legacy_sql=false 'DELETE FROM answer_events WHERE event_type IN ("smoke_test", "error_state_drill", "dlq_drill") OR JSON_VALUE(attributes, "$.drill") = "duplicate"'
+bq --project_id="$(gcloud config get project)" --dataset_id=exit_ticket_analytics query --use_legacy_sql=false 'DELETE FROM answer_events WHERE event_type IN ("smoke_test", "error_state_drill", "dlq_drill", "unknown_key_drill") OR JSON_VALUE(attributes, "$.drill") = "duplicate" OR JSON_VALUE(attributes, "$.source") = "synthetic-backfill" OR message_id IN ("22637179024232002", "22637179024232003", "22637179024232004", "22637179024232005")'
 ```
 
-It should affect 4 rows. A "streaming buffer" error means it's too early: run it again later.
+It should affect 4 test rows, the 490 backfill rows, the 4 laptop rows from 6C (which came from local Postgres, not
+Cloud SQL) and the unknown-key row from step 1. That's 499 rows once step 1 has run. If BigQuery answers with a
+"streaming buffer" error, the rows are too recent; run it again later.
 
-**Other open items:**
-
-- **The 3 answers missing from BigQuery** (§5.1): known, kept as evidence.
-- **The 4 answers from the 6C local run, and the 3 + 3 real GKE answers:** valid events, kept.
+**Kept on purpose:** the 3 GKE answers missing from BigQuery (§5.1). Step 4 republishes them, which also shows the
+republisher repairing a real gap.
 
 ---
 
-## 9. Lessons learned
+## 10. Lessons learned
 
 | Lesson | Where |
 |---|---|
@@ -387,10 +453,12 @@ It should affect 4 rows. A "streaming buffer" error means it's too early: run it
 | **Dedup on the business key, not the transport key.** The duplicate had a new `message_id`; `event_id` caught it | §5.4 |
 | **Mark synthetic data without changing the contract.** A message attribute plus `write_metadata` | §6 |
 | **First calls are slow.** 667 ms for the first publish from a cold pod (connection + token exchange) | §4 |
+| **Test the claim, not just the case you tried.** Dedup worked for the retry we drilled, but a rebuilt event got a new random ID. The ID must come from the business key | §7 |
+| **The source of truth goes first.** Synthetic data published straight to the topic can never reconcile with the database | §6 |
 
 ---
 
-## 10. Interview talking points
+## 11. Interview talking points
 
 - *"How did you prove the service account can publish, not just you?"* The local run used my Owner credentials, which
   proves nothing about the app's identity. On GKE the pod publishes as `exit-ticket-api` through Workload Identity, and
@@ -408,6 +476,10 @@ It should affect 4 rows. A "streaming buffer" error means it's too early: run it
 - *"How did you test failure without risking production data?"* Isolated drill resources behind a Terraform variable
   that defaults to off, a subscription filter so real traffic never touches them, and marked test events that are
   deleted afterwards.
+- *"What bug did you find in your own design?"* My dedup key was a random UUID per event build. It handled retries
+  but not a republish from the database, which would double-count. I made it a deterministic `uuid5` of the answer ID,
+  with no schema change, pinned the namespace with a test, and made the republisher also skip answers already in
+  BigQuery, for rows written before the fix.
 - *"Where did the demo data come from?"* A backfill script built on the app's own event model and the seed IDs, marked
   with a Pub/Sub attribute, deterministic so reruns are deduplicated, and dry run by default.
 

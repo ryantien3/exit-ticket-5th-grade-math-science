@@ -406,7 +406,7 @@ the answer**: `uuid5(EVENT_NAMESPACE, "answer_submitted:" + answer_id)`.
 
 > **Corrected in 6D.** This doc first said the `event_id` was "made once, when the event object is built", i.e. a
 > random `uuid4()`. That covers cases 1 and 2 but **not case 3**: a rebuilt event got a new random ID, so the view would
-> have counted a republished answer twice. See [6D §8](phase-6d-gke-pipeline.md).
+> have counted a republished answer twice. See [6D §7](phase-6d-gke-pipeline.md#7-the-event_id-flaw-and-the-fix-31).
 
 The view keeps one row per `event_id` (§5). Looker Studio reads only the view, never the raw table.
 
