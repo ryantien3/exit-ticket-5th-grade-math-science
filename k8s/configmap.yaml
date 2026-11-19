@@ -16,3 +16,6 @@ data:
   # Cloud SQL through the Auth Proxy sidecar on 127.0.0.1. No password: the proxy logs in as
   # the IAM database user with a short-lived token. %40 is the "@" in the user name.
   DATABASE_URL: postgresql+psycopg://exit-ticket-api%40PROJECT_ID.iam@127.0.0.1:5432/exitticket
+  # Where the api publishes answer events (Phase 6): the analytics layer's topic_id output.
+  # Read once at startup: after changing it, `kubectl rollout restart deployment/api`.
+  PUBSUB_TOPIC: projects/PROJECT_ID/topics/answer-events

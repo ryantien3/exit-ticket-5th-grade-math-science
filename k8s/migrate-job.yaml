@@ -76,7 +76,7 @@ spec:
               drop: ["ALL"]
       containers:
         - name: migrate
-          image: us-east4-docker.pkg.dev/PROJECT_ID/exit-ticket/api@sha256:55c56a56c22d6532f01d7622df1d9277f0cf2ad535bd28aa5772c11b3cc41f94
+          image: us-east4-docker.pkg.dev/PROJECT_ID/exit-ticket/api@sha256:451e6ff57875217c93498d65e58694643fc816f5551443e58601d65a5ee834f4
           command: ["alembic", "upgrade", "head"]
           # alembic/env.py loads the app settings, so the Job needs the same settings as the api:
           # these from the ConfigMap, the secrets from the mounted files.
