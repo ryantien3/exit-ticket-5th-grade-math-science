@@ -3,6 +3,9 @@ locals {
   services = toset([
     "artifactregistry.googleapis.com",
     "bigquery.googleapis.com",
+    # BigQuery subscriptions write through the Storage Write API (Phase 6). Enabled automatically
+    # as a dependency of bigquery.googleapis.com; listed so the pipeline doesn't rely on that.
+    "bigquerystorage.googleapis.com",
     "cloudbuild.googleapis.com",
     "cloudresourcemanager.googleapis.com",
     "compute.googleapis.com",
