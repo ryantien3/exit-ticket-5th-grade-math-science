@@ -131,10 +131,33 @@ def test_message_decodes_with_the_avro_schema():
     assert record["is_correct"] is True
 
 
-def test_event_id_is_new_per_event_but_stable_per_message():
-    event = make_event()
-    assert event.event_id != make_event().event_id
-    assert json.loads(event.to_message())["event_id"] == json.loads(event.to_message())["event_id"]
+def test_same_answer_gets_the_same_event_id_in_every_build():
+    # The app at submit time and a republish from Cloud SQL build separate objects for one answer:
+    # they must agree, or the view's dedup (PARTITION BY event_id) counts the answer twice.
+    answer_id = uuid.uuid4()
+    first = make_event(answer_id=answer_id)
+    rebuilt = make_event(answer_id=answer_id)
+    assert first.event_id == rebuilt.event_id == events.answer_event_id(answer_id)
+    assert json.loads(first.to_message())["event_id"] == json.loads(rebuilt.to_message())["event_id"]
+
+
+def test_different_answers_get_different_event_ids():
+    ids = {make_event().event_id for _ in range(100)}  # make_event uses a fresh answer_id each time
+    assert len(ids) == 100
+
+
+def test_event_id_namespace_never_changes():
+    # Pinned: changing EVENT_NAMESPACE would re-key every answer and break dedup of republishes.
+    answer_id = uuid.UUID("b4b4e164-3866-4de5-a365-a44d2a8360ee")
+    assert events.answer_event_id(answer_id) == uuid.UUID("61fb0c0f-69bd-5b99-a135-3716ec91bc80")
+    assert events.answer_event_id(answer_id).version == 5
+
+
+def test_an_explicit_event_id_must_be_the_derived_one():
+    answer_id = uuid.uuid4()
+    assert make_event(answer_id=answer_id, event_id=events.answer_event_id(answer_id)).event_id
+    with pytest.raises(ValidationError, match="answer_event_id"):
+        make_event(answer_id=answer_id, event_id=uuid.uuid4())
 
 
 @pytest.mark.parametrize("field", ["display_name", "login_code"])
@@ -249,7 +272,8 @@ def test_submission_publishes_one_event_per_answer_after_the_commit(
     bodies = [json.loads(data) for _, data in fake.published]
     assert {topic for topic, _ in fake.published} == {TOPIC}
     assert {body["answer_id"] for body in bodies} == {str(row.id) for row in rows}
-    assert len({body["event_id"] for body in bodies}) == 5
+    # Each event_id is the deterministic one for its saved answer.
+    assert {body["event_id"] for body in bodies} == {str(events.answer_event_id(row.id)) for row in rows}
     assert {body["ticket_id"] for body in bodies} == {ticket_id(TICKET)}
     assert {(body["standard_domain"], body["subject"]) for body in bodies} == {("NY-5.NBT", "math")}
     for _, data in fake.published:

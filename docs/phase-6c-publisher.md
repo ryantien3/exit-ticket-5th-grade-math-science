@@ -146,7 +146,11 @@ still for `linux/amd64`.
   - `schema_version = 2`
   - `subject` is `math` or `science`
   - `chosen_choice` is `A` to `D`
-- **`event_id` defaults to `uuid4()`.** It's made once per event, and every retry of the same message carries the same
+- **`event_id` is derived from the answer** (since 6D): `answer_event_id(answer_id)` =
+  `uuid5(EVENT_NAMESPACE, "answer_submitted:" + answer_id)`, with a fixed namespace constant. The app, a retry and a
+  republish from Cloud SQL all get the same ID, so the view keeps one row per answer. An explicit `event_id` that
+  doesn't match is rejected. **As first shipped in 6C it was `uuid4()`**, which covered retries of the same object but
+  not a rebuilt event (see §4). The original wording: it was made once per event, and every retry of the same message carries the same
   value. That's the dedup key the view uses (6A §3.8).
 - **`answered_at` must be timezone-aware.** A naive time would be read as the wrong instant.
 - **`to_message()`** produces the Avro JSON encoding. UUIDs become strings, and `answered_at` becomes integer
@@ -229,8 +233,11 @@ answers are saved and the events are gone. Nothing logs it, because nothing runs
 
 - It needs a relay process, an outbox table and a migration.
 - The window here is milliseconds per submission. The local run went from commit to published in about 0.36 s.
-- Nothing is truly lost: every answer is in Cloud SQL. A backfill can republish any missing `answer_id`s, and dedup
-  makes running it twice safe.
+- Nothing is truly lost: every answer is in Cloud SQL, and `scripts/republish-answers.py` (6D) can republish any
+  missing `answer_id`s. **What makes that safe to run twice is the deterministic `event_id`**: a republished answer
+  carries the same `event_id` as the original, so the view keeps one copy. With the random `uuid4()` this PR first
+  shipped, it was **not** safe: each run would have added new IDs, and the view would have counted those answers
+  again. Rows written before the fix have random IDs, so the script also skips `answer_id`s already in BigQuery.
 
 **When to revisit:** if analytics ever becomes something people act on in real time, or if the logs show
 `answer_events_unconfirmed_at_shutdown` in practice.
@@ -246,7 +253,7 @@ real `concurrent.futures.Future` objects, so the callbacks run exactly as in pro
 |---|---|
 | Fields exactly as the contract | `test_model_fields_match_the_avro_schema_exactly`: model fields == `.avsc` fields, same names, same order |
 | Payload matches the `.avsc` | `test_message_decodes_with_the_avro_schema`: **fastavro** decodes the message with the real schema file; `answered_at == 1795010730123456`; no extra or missing keys. Also run on each of the 5 messages of a real submission |
-| `event_id` | `test_event_id_is_new_per_event_but_stable_per_message` |
+| `event_id` | Since 6D (111 tests): `test_same_answer_gets_the_same_event_id_in_every_build`, `test_different_answers_get_different_event_ids`, `test_event_id_namespace_never_changes` (pins one known value), `test_an_explicit_event_id_must_be_the_derived_one`. The endpoint test checks each published `event_id` == `answer_event_id(saved row id)`. (6C's original test checked only that two builds got *different* IDs, which was the flaw) |
 | No name or sign-in code | `test_a_name_or_sign_in_code_cannot_be_added` (the model refuses them); `test_payload_has_no_name_or_sign_in_code` (the real student's `display_name` and `login_code` aren't in any published byte) |
 | Naive timestamps | `test_naive_timestamp_is_rejected` |
 | No-op path | `test_no_topic_creates_no_client_and_logs_once[None]` and `[""]`: no client, one info line, the event still logged |

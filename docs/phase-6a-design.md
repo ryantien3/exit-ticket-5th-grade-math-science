@@ -390,16 +390,23 @@ The docs say it plainly: "the BigQuery subscription only supports at least once 
 critical for your use case, consider downstream processes in BigQuery to handle potential duplicates"
 ([BigQuery subscriptions](https://cloud.google.com/pubsub/docs/bigquery)).
 
-Duplicates come from two places:
+Duplicates come from three places:
 
 1. **Redelivery.** The subscription writes the same message again (same `message_id`).
 2. **Publisher retries.** If the client times out waiting for Pub/Sub's reply and retries, Pub/Sub may store **two
    messages** with **different** `message_id`s but the same body.
+3. **A republish from Cloud SQL** (the backfill in §9). It builds a **new** event object for an answer that may already
+   have been published.
 
-So `message_id` can't dedup case 2. The **`event_id`** we put in the body can:
+So `message_id` can't dedup cases 2 and 3. The **`event_id`** we put in the body can, **only because it's derived from
+the answer**: `uuid5(EVENT_NAMESPACE, "answer_submitted:" + answer_id)`.
 
-- It's made once, when the event object is built.
-- Every retry and redelivery carries the same value.
+- The app, a retry and a republish all compute the same value for the same answer.
+- Every retry and redelivery carries it.
+
+> **Corrected in 6D.** This doc first said the `event_id` was "made once, when the event object is built", i.e. a
+> random `uuid4()`. That covers cases 1 and 2 but **not case 3**: a rebuilt event got a new random ID, so the view would
+> have counted a republished answer twice. See [6D §8](phase-6d-gke-pipeline.md).
 
 The view keeps one row per `event_id` (§5). Looker Studio reads only the view, never the raw table.
 
@@ -485,7 +492,7 @@ values captured before the commit (ORM objects expire after commit). Version 1 (
 
 | # | Field | Avro type | BigQuery | Mode | Meaning | Source in 6C | Example (synthetic) |
 |---|---|---|---|---|---|---|---|
-| 1 | `event_id` | string | STRING | REQUIRED | Unique ID of this event; the dedup key | **new**: `uuid.uuid4()` when the event is built | `3e2d2ad7-2677-46f8-be62-a605c3a7046b` |
+| 1 | `event_id` | string | STRING | REQUIRED | Unique ID of this event; the dedup key | **new**: `uuid5(EVENT_NAMESPACE, "answer_submitted:" + answer_id)`, deterministic (§3.8; was `uuid4()` until 6D) | `3e2d2ad7-2677-46f8-be62-a605c3a7046b` |
 | 2 | `event_type` | string | STRING | REQUIRED | What happened | **new**: constant | `answer_submitted` |
 | 3 | `schema_version` | int | INT64 | REQUIRED | Contract version | changed: `1` → `2` | `2` |
 | 4 | `answered_at` | long, timestamp-micros | TIMESTAMP | REQUIRED | When the answer was graded (UTC). Partition column | `row.answered_at` | `1795010730123456` (= `2026-11-18 14:05:30.123456 UTC`) |
@@ -662,8 +669,11 @@ and Cloud SQL. The session-start check gains one line: the BigQuery subscription
 
 ## 9. Known gaps
 
-- **Lost events between commit and publish** (§3.7). Fix: transactional outbox. Recovery today: a backfill script
-  that republishes from Cloud SQL `answers`, which the view's dedup makes safe to run twice.
+- **Lost events between commit and publish** (§3.7). Fix: transactional outbox. Recovery today: a script
+  that republishes from Cloud SQL `answers` (6D: `scripts/republish-answers.py`). It's safe to run twice **only
+  because `event_id` is derived from `answer_id`**: a republished answer gets the same `event_id` as the original,
+  and the view keeps one. Rows published before 6D have random IDs, so the script also skips `answer_id`s already in
+  BigQuery.
 - **Error-state backlog expires after 7 days** (§3.5, path 3). If the subscription breaks and nobody notices for a week,
   messages expire. Mitigations: the session-start state check now, an alert on subscription state or backlog age in
   Phase 7/8, and the Cloud SQL backfill.
@@ -694,7 +704,9 @@ and Cloud SQL. The session-start check gains one line: the BigQuery subscription
 - *"Why a BigQuery subscription instead of Dataflow?"* No transformation was needed that a view can't do, so the
   managed path has nothing to run and nothing to operate. The trade-off is at-least-once delivery, handled by dedup in a
   view. Dataflow is for windowing, joins and exactly-once in flight.
-- *"How do you handle duplicates in an at-least-once system?"* Make the consumer idempotent: an `event_id` made at
+- *"How do you handle duplicates in an at-least-once system?"* Make the consumer idempotent: a deterministic
+  `event_id` derived from the business key (the answer), so even a rebuilt event matches. Here is the original
+  answer, as first written. It was too weak for republishes, which is why the ID changed in 6D: an `event_id` made at
   the source, dedup in the view. `message_id` alone misses publisher-side retries.
 - *"What does a dead-letter topic NOT catch?"* Subscription-level failures. A deleted table or a lost IAM grant puts a
   BigQuery subscription in an error state and messages back up in the backlog; they're never dead-lettered. You need

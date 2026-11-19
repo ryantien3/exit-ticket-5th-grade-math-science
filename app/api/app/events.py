@@ -21,11 +21,24 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from google.cloud import pubsub_v1
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
 
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+# Fixed forever: every event_id is derived from it. Changing it would give every answer a new
+# event_id, and the view would count republished answers twice. Generated once, 2026-11-19.
+EVENT_NAMESPACE = uuid.UUID("e11b5126-7aa4-4377-9af9-0f89ee1d4fb6")
+
+
+def answer_event_id(answer_id: uuid.UUID) -> uuid.UUID:
+    """The event_id of an answer's answer_submitted event: the same answer always gets the same id.
+
+    That's what makes publishing idempotent. The app, a retry and a republish from Cloud SQL all
+    produce the same event_id, so the answer_events_clean view keeps one row per answer.
+    """
+    return uuid.uuid5(EVENT_NAMESPACE, f"answer_submitted:{answer_id}")
 
 # How long shutdown waits for messages still in flight. Kubernetes allows 30 s by default.
 SHUTDOWN_TIMEOUT_SECONDS = 10
@@ -36,7 +49,8 @@ class AnswerEvent(BaseModel):
     # ignores unknown keys (6A §6 test 4), so this model is what keeps them out.
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    event_id: uuid.UUID = Field(default_factory=uuid.uuid4)  # made once; retries reuse it
+    # Derived from answer_id (answer_event_id), never random: see the validators below.
+    event_id: uuid.UUID
     event_type: Literal["answer_submitted"] = "answer_submitted"
     schema_version: Literal[2] = 2
     answered_at: datetime
@@ -50,6 +64,21 @@ class AnswerEvent(BaseModel):
     subject: Literal["math", "science"]
     chosen_choice: Literal["A", "B", "C", "D"]
     is_correct: bool
+
+    @model_validator(mode="before")
+    @classmethod
+    def derive_event_id(cls, data: object) -> object:
+        # Callers don't pass event_id: it's computed from answer_id.
+        if isinstance(data, dict) and "event_id" not in data and data.get("answer_id") is not None:
+            data = {**data, "event_id": answer_event_id(uuid.UUID(str(data["answer_id"])))}
+        return data
+
+    @model_validator(mode="after")
+    def event_id_matches_answer(self) -> "AnswerEvent":
+        # An explicit event_id (e.g. from a republish) must be the derived one, or dedup breaks.
+        if self.event_id != answer_event_id(self.answer_id):
+            raise ValueError("event_id must be answer_event_id(answer_id)")
+        return self
 
     @field_validator("answered_at")
     @classmethod
