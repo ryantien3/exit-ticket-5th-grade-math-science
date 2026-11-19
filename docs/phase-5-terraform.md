@@ -56,20 +56,24 @@ story of each session.
  ├── foundation/default.tfstate  ◄── foundation/   APIs, SAs, IAM, secret containers,        months, ~$0
  │                                                 Artifact Registry, VPC, subnet, PSA
  ├── data/default.tfstate        ◄── data/         Cloud SQL instance, database, IAM user    months, stopped
- └── cluster/default.tfstate     ◄── cluster/      GKE Autopilot                              each session
+ ├── cluster/default.tfstate     ◄── cluster/      GKE Autopilot                              each session
+ └── analytics/default.tfstate   ◄── analytics/    Pub/Sub schema, topics, subscriptions,     months, ~$0
+                                                   BigQuery dataset/table/view, IAM          (added in 6B)
 
  Outputs flow one way, read with terraform_remote_state (read-only):
    foundation ──► data      network_id, psa_range_name, api_sa_email
    foundation ──► cluster   network_id, subnet_id, pods/services range names, nodes_sa_email
    data       ──► cluster   connection_name, private_ip (passed through for the manifests)
+   foundation ──► analytics api_sa_email
 ```
 
 | Layer | Owns | Protected by | Not in Terraform, on purpose |
 |---|---|---|---|
 | [`bootstrap`](../infra/terraform/bootstrap/) | State bucket (versioning, lifecycle keeps 10 old versions) | `force_destroy = false`, `deletion_policy = "PREVENT"`, `prevent_destroy` | — |
-| [`foundation`](../infra/terraform/foundation/) | 16 APIs (`disable_on_destroy = false`); `exit-ticket-api`, `exit-ticket-nodes`; 8 additive IAM grants; 3 secret **containers**; the `exit-ticket` repository + cleanup policy; `exit-ticket-vpc`, subnet with `pods`/`services`, PSA range + peering | `PREVENT` on SAs, repository, network, peering; `deletion_protection` on secrets | **Secret values** (they'd be in state in plain text): `scripts/create-app-secrets.sh` and pipes |
+| [`foundation`](../infra/terraform/foundation/) | 17 APIs (`bigquerystorage` added in 6B; `disable_on_destroy = false`); `exit-ticket-api`, `exit-ticket-nodes`; 8 additive IAM grants; 3 secret **containers**; the `exit-ticket` repository + cleanup policy; `exit-ticket-vpc`, subnet with `pods`/`services`, PSA range + peering | `PREVENT` on SAs, repository, network, peering; `deletion_protection` on secrets | **Secret values** (they'd be in state in plain text): `scripts/create-app-secrets.sh` and pipes |
 | [`data`](../infra/terraform/data/) | `exit-ticket-db` (public IP proxy-only + private IP `10.40.0.3`), database `exitticket`, IAM user `exit-ticket-api@PROJECT_ID.iam`; `activation_policy` variable (default `NEVER`) | `deletion_protection`, `deletion_policy = "PREVENT"` (all three), `settings.deletion_protection_enabled` | The `postgres` user and password; the in-database `GRANT`s |
 | [`cluster`](../infra/terraform/cluster/) | `exit-ticket` Autopilot: private nodes, external IP endpoint off, DNS endpoint, node SA, Workload Identity, Secret Manager add-on | Nothing, on purpose (`deletion_protection = false`): it holds no data | The Kubernetes manifests (`kubectl`, Cloud Build in Phase 7) |
+| [`analytics`](../infra/terraform/analytics/) ([6B](phase-6b-analytics.md)) | Avro schema `answer-event`; topics `answer-events` (schema, JSON) and `answer-events-dlq`; subscriptions `answer-events-to-bq` (BigQuery, DLQ after 5) and `answer-events-dlq-inspect`; dataset `exit_ticket_analytics` (us-east4), table `answer_events`, view `answer_events_clean`; 4 resource-level IAM grants | Dataset: `delete_contents_on_destroy = false`, `deletion_policy = "PREVENT"`, `prevent_destroy`. Table: `deletion_protection`, `prevent_destroy` | The data itself (rows written by Pub/Sub) |
 
 Every layer: `versions.tf` identical (Terraform `~> 1.17.0`, `google ~> 8.11`, locked at 8.11.0 for `darwin_arm64`
 and `linux_amd64`), a `backend.tf` with only its `prefix` (the bucket is passed at `init`), `terraform.tfvars.example`
@@ -88,6 +92,7 @@ state, which is what the per-session teardown needs.
 | foundation | ~$0: SAs, IAM, VPC, subnet, PSA peering are free; 3 secret versions are within the free tier; images ~100 MB, cents | Same |
 | data | ~$0.011/hr compute + 10 GB SSD + public IPv4 | **Stopped**: disk + IP + one on-demand backup, ~$2–4/month |
 | cluster | $0.10/hr fee (covered by GKE's free-tier credit for one Autopilot cluster) + Pod requests ~$0.015/hr | **Destroyed**: $0 |
+| analytics | Usage only (KB of messages, rows, queries): ~$0 | Same. Nothing bills by the hour, so it **stays up** |
 | Ingress (optional, kubectl) | ~$0.025/hr | Deleted |
 
 A 3-hour session is about $0.40 gross, cents net of credits. The private IP and the peering add nothing.
@@ -198,6 +203,18 @@ scripts/push-images.sh
 ```
 Then deploy as in [§4](#4-starting-a-session), and seed once as the app ([4A §8](phase-4a-cloud-sql.md#8-migrations-and-seed-as-the-app)).
 
+### 3.9 analytics (~$0) — [6B](phase-6b-analytics.md)
+
+Needs only foundation, so it can be built any time after §3.3:
+```bash
+cd ~/projects/exit-ticket-5th-grade-math-science/infra/terraform/analytics
+terraform init -backend-config="bucket=$(gcloud config get project)-tfstate"
+terraform plan -out=tfplan
+terraform apply tfplan
+rm tfplan
+```
+The Pub/Sub service agent must exist first (it appears when the Pub/Sub API is enabled; 6B §4 shows the check).
+
 ---
 
 ## 4. Starting a session
@@ -282,12 +299,14 @@ echo "--- disks"; gcloud compute disks list
 echo "--- addresses"; gcloud compute addresses list
 echo "--- sql"; gcloud sql instances describe exit-ticket-db --format="value(state,settings.activationPolicy,settings.deletionProtectionEnabled)"
 echo "--- firewall rules"; gcloud compute firewall-rules list --format="table(name,network.basename(),sourceRanges.list())"
+echo "--- bq subscription"; gcloud pubsub subscriptions describe answer-events-to-bq --format="value(state)"
 echo "--- cluster state"; terraform -chdir=infra/terraform/cluster state list | wc -l
 echo "--- processes"; pgrep -fl "cloud-sql-proxy|kubectl" || echo "none"
 ```
 Healthy (2026-11-18): no clusters, forwarding rules, backend services, NEGs or disks; only `exit-ticket-psa` in
-addresses; `STOPPED NEVER True`; only the four `default-allow-*` rules (none on `exit-ticket-vpc`); cluster state
-`0`; no processes.
+addresses; `STOPPED NEVER True`; `ACTIVE` for the BigQuery subscription (since 6B: anything else means messages are
+piling up in its backlog and expire after 7 days); only the four `default-allow-*` rules (none on `exit-ticket-vpc`);
+cluster state `0`; no processes.
 
 ### Any time
 
@@ -339,6 +358,7 @@ what a scheduled drift check in CI (Phase 7) would test.
 | foundation | `No changes`, exit 0 | ✅ `No changes`, exit 0 (37 resources and data sources refreshed) |
 | data | `No changes`, exit 0 (stopped = the `NEVER` default) | ✅ `No changes`, exit 0 |
 | cluster | `1 to add`, exit 2: **not drift**, the cluster is destroyed between sessions by design | ✅ `google_container_cluster.main will be created`, `Plan: 1 to add`, exit 2 |
+| analytics (since 6B) | `No changes`, exit 0: add `terraform -chdir=infra/terraform/analytics plan -detailed-exitcode` to the block | ✅ exit 0 after the 6B apply and smoke test |
 
 ### How drift would be handled
 
@@ -392,8 +412,9 @@ lifted deliberately.
 | 1 | Kubernetes | — | `kubectl delete -f k8s/ingress.yaml`, `kubectl delete namespace exit-ticket` | The in-cluster controllers delete the load balancer and NEGs |
 | 2 | `cluster` | — (`deletion_protection = false` already) | `terraform destroy` | Nothing depends on it |
 | 3 | `data` | Optionally a final export to Cloud Storage. `deletion_policy = "DELETE"` on all three, `deletion_protection = false`, `settings.deletion_protection_enabled = false`; apply | `terraform destroy` (the instance's backups go with it unless `retain_backups_on_delete`) | Cloud SQL must be gone before the peering can be removed |
-| 4 | `foundation` | `deletion_policy = "REMOVE_PEERING"` on the PSA connection, `"DELETE"` on the network, SAs and repository, `deletion_protection = false` on the secrets; apply | `terraform destroy` (APIs stay on: `disable_on_destroy = false`) | Google can take days to release the producer subnet; `REMOVE_PEERING` deletes the peering directly once Cloud SQL is gone |
-| 5 | `bootstrap` | Migrate its state back to local (remove `backend.tf`, `init -migrate-state`); `deletion_policy = "DELETE"`, `force_destroy = true`, remove `prevent_destroy`; apply | `terraform destroy` | It holds every other layer's state, so it goes last |
+| 4 | `analytics` | Optionally a final `bq extract` of `answer_events` to Cloud Storage. Table: `deletion_protection = false`, remove `prevent_destroy`. Dataset: `deletion_policy = "DELETE"`, remove `prevent_destroy`; `delete_contents_on_destroy` may stay `false` because Terraform deletes the table and view first; apply | `terraform destroy` | Its IAM grants name foundation's `exit-ticket-api`, and it reads foundation's state; destroying foundation first would leave grants for a deleted account and a remote-state read that fails |
+| 5 | `foundation` | `deletion_policy = "REMOVE_PEERING"` on the PSA connection, `"DELETE"` on the network, SAs and repository, `deletion_protection = false` on the secrets; apply | `terraform destroy` (APIs stay on: `disable_on_destroy = false`) | Google can take days to release the producer subnet; `REMOVE_PEERING` deletes the peering directly once Cloud SQL is gone |
+| 6 | `bootstrap` | Migrate its state back to local (remove `backend.tf`, `init -migrate-state`); `deletion_policy = "DELETE"`, `force_destroy = true`, remove `prevent_destroy`; apply | `terraform destroy` | It holds every other layer's state, so it goes last |
 
 Afterwards: the [Phase 4 §7](phase-4-cloud-sql.md#7-teardown) verify list should be empty apart from the `default`
 network, then `gcloud projects delete` if the whole project goes.

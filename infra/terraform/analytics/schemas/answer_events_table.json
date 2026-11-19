@@ -1,0 +1,20 @@
+[
+  {"name": "event_id", "type": "STRING", "mode": "REQUIRED", "description": "UUID made once per event; the view dedups on it."},
+  {"name": "event_type", "type": "STRING", "mode": "REQUIRED", "description": "Always answer_submitted for now."},
+  {"name": "schema_version", "type": "INTEGER", "mode": "REQUIRED", "description": "Contract version (2)."},
+  {"name": "answered_at", "type": "TIMESTAMP", "mode": "REQUIRED", "description": "When the answer was graded (UTC). Partition column."},
+  {"name": "answer_id", "type": "STRING", "mode": "REQUIRED", "description": "UUID of the answers row in Cloud SQL."},
+  {"name": "student_id", "type": "STRING", "mode": "REQUIRED", "description": "Internal student UUID. Pseudonymous: no name, no login code."},
+  {"name": "classroom_id", "type": "STRING", "mode": "REQUIRED", "description": "Classroom UUID. First cluster column."},
+  {"name": "ticket_id", "type": "STRING", "mode": "REQUIRED", "description": "Exit ticket UUID."},
+  {"name": "question_id", "type": "STRING", "mode": "REQUIRED", "description": "Question UUID."},
+  {"name": "standard_code", "type": "STRING", "mode": "REQUIRED", "description": "NY standard, e.g. NY-5.NF.4. Second cluster column."},
+  {"name": "standard_domain", "type": "STRING", "mode": "REQUIRED", "description": "Standard domain, e.g. NY-5.NF."},
+  {"name": "subject", "type": "STRING", "mode": "REQUIRED", "description": "math or science."},
+  {"name": "chosen_choice", "type": "STRING", "mode": "REQUIRED", "description": "A, B, C or D."},
+  {"name": "is_correct", "type": "BOOLEAN", "mode": "REQUIRED", "description": "Graded on the server."},
+  {"name": "subscription_name", "type": "STRING", "mode": "NULLABLE", "description": "write_metadata: the subscription that wrote the row."},
+  {"name": "message_id", "type": "STRING", "mode": "NULLABLE", "description": "write_metadata: Pub/Sub message ID."},
+  {"name": "publish_time", "type": "TIMESTAMP", "mode": "NULLABLE", "description": "write_metadata: when Pub/Sub accepted the message."},
+  {"name": "attributes", "type": "JSON", "mode": "NULLABLE", "description": "write_metadata: message attributes, incl. googclient_schemarevisionid."}
+]
