@@ -21,6 +21,9 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 # Test-only values, so tests never depend on (or reveal) the secrets in your .env.
 os.environ["SESSION_SECRET"] = "test-only-session-secret-not-used-anywhere-else"
 os.environ["TEACHER_PASSCODE"] = "test-teacher-passcode"
+# Empty = publishing off, even if your shell or .env sets PUBSUB_TOPIC: tests never reach the real
+# topic. Tests that exercise the publisher install a fake client (tests/test_events.py).
+os.environ["PUBSUB_TOPIC"] = ""
 
 # Make scripts/seed.py importable, so tests load exactly the same seed data.
 sys.path.insert(0, str(API_DIR.parent.parent / "scripts"))

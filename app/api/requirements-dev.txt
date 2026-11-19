@@ -2,3 +2,5 @@
 -r requirements.txt
 pytest==9.1.1
 httpx==0.28.1
+# Checks answer events against the Avro schema in tests, offline (tests/test_events.py).
+fastavro==1.13.1

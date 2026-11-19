@@ -6,3 +6,6 @@ psycopg[binary]==3.3.6
 alembic==1.20.0
 pydantic-settings==2.16.0
 pyjwt==2.15.1
+# Publishes answer events (Phase 6C). 2.43.0 (2026-10-15), not 2.44.0: that one was 6 days old and
+# only regenerated API sources. Requires Python 3.10+ since 2.39.1.
+google-cloud-pubsub==2.43.0

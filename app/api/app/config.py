@@ -43,6 +43,18 @@ class Settings(BaseSettings):
     # Shared teacher passcode, until teacher sign-in moves to Google (IAP) in Phase 3.
     teacher_passcode: SecretStr = Field(min_length=8)
 
+    # Where answer events are published: the full topic path, projects/PROJECT_ID/topics/answer-events.
+    # Unset or empty (local dev, tests) = events are only logged, nothing is sent to Google Cloud.
+    pubsub_topic: str | None = Field(
+        default=None, pattern=r"^projects/[a-z][a-z0-9-]{4,28}[a-z0-9]/topics/[A-Za-z][A-Za-z0-9_.~+%-]{2,254}$"
+    )
+
+    @field_validator("pubsub_topic", mode="before")
+    @classmethod
+    def empty_topic_means_unset(cls, value: object) -> object:
+        # PUBSUB_TOPIC= (set but empty) must not be an error, nor a topic called "".
+        return None if value == "" else value
+
     @field_validator("session_secret", "teacher_passcode")
     @classmethod
     def not_the_example_value(cls, value: SecretStr) -> SecretStr:
