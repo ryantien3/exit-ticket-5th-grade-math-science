@@ -4,3 +4,6 @@ pytest==9.1.1
 httpx==0.28.1
 # Checks answer events against the Avro schema in tests, offline (tests/test_events.py).
 fastavro==1.13.1
+# Operator scripts only, never the image: scripts/republish-answers.py reads which answers are already in
+# BigQuery. 3.47.0 (2026-10-29); nothing breaking since "require Python 3.10+" in 3.42.3.
+google-cloud-bigquery==3.47.0
