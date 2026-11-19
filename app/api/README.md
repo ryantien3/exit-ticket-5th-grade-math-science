@@ -95,6 +95,7 @@ Read from environment variables; `.env` is a local-only fallback and is gitignor
 | `ENVIRONMENT` | no | `local` | `local`, `dev`, `prod` |
 | `SESSION_SECRET` | yes | (none) | 32+ random characters; signs sign-in tokens |
 | `TEACHER_PASSCODE` | yes | (none) | 8+ characters |
+| `PUBSUB_TOPIC` | no | (none: events are only logged) | `projects/PROJECT_ID/topics/answer-events`. Full path only. Uses Application Default Credentials; see [docs/phase-6c-publisher.md](../../docs/phase-6c-publisher.md). Prefer setting it on the command line over `.env`, so publishing is never on by accident |
 
 ## Stopping
 

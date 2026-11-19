@@ -52,6 +52,22 @@ def test_secret_files_are_still_validated(
         Settings(_env_file=None, _secrets_dir=secrets_dir)
 
 
+def test_pubsub_topic_is_optional(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PUBSUB_TOPIC")
+    assert Settings(_env_file=None).pubsub_topic is None
+    monkeypatch.setenv("PUBSUB_TOPIC", "")  # set but empty, e.g. a blank ConfigMap value
+    assert Settings(_env_file=None).pubsub_topic is None
+
+
+def test_pubsub_topic_must_be_a_full_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PUBSUB_TOPIC", "projects/my-project-1/topics/answer-events")
+    assert Settings(_env_file=None).pubsub_topic == "projects/my-project-1/topics/answer-events"
+
+    monkeypatch.setenv("PUBSUB_TOPIC", "answer-events")  # the short name is a common mistake
+    with pytest.raises(ValueError, match="pubsub_topic"):
+        Settings(_env_file=None)
+
+
 def test_missing_secrets_dir_is_ignored(tmp_path: Path) -> None:
     assert existing_dir(tmp_path) == tmp_path
     assert existing_dir(tmp_path / "not-mounted") is None

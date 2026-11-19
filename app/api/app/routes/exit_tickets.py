@@ -12,7 +12,15 @@ from app import events
 from app.auth import get_student_or_teacher, require_student, require_teacher
 from app.db import get_session
 from app.grading import percent, summarize_by_standard
-from app.models import Answer, ClassroomExitTicket, ExitTicket, ExitTicketQuestion, Question, Student
+from app.models import (
+    Answer,
+    ClassroomExitTicket,
+    ExitTicket,
+    ExitTicketQuestion,
+    Question,
+    Standard,
+    Student,
+)
 from app.schemas import (
     LETTERS,
     Choice,
@@ -166,7 +174,16 @@ def submit_exit_ticket(
         )
         for _, question in ticket_questions
     ]
-    # Plain values captured now, because the ORM objects expire after commit.
+    # The analytics event also carries each standard's domain and subject (no standards table in
+    # BigQuery). One query for this ticket's standards.
+    standards = {
+        standard.code: standard
+        for standard in session.scalars(
+            select(Standard).where(Standard.code.in_({row.standard_code for row in rows}))
+        )
+    }
+    # The events are only BUILT here, from the exact values being saved (ORM objects expire after
+    # commit). They are PUBLISHED below, after the commit succeeds.
     answer_events = [
         events.AnswerEvent(
             answer_id=row.id,
@@ -175,6 +192,8 @@ def submit_exit_ticket(
             ticket_id=row.ticket_id,
             question_id=row.question_id,
             standard_code=row.standard_code,
+            standard_domain=standards[row.standard_code].domain,
+            subject=standards[row.standard_code].subject,
             chosen_choice=row.chosen_choice,
             is_correct=row.is_correct,
             answered_at=row.answered_at,
